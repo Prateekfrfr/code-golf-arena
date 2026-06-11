@@ -7,10 +7,10 @@ import { socket } from "../../../lib/socket";
 export default function LobbyRoom({
   params,
 }: {
-  params: { roomCode: string };
+  params: Promise<{ roomCode: string }>;
 }) {
   const router = useRouter();
-  const { roomCode } = params;
+  const { roomCode } = React.use(params);
 
   useEffect(() => {
     function handleRoomReady() {

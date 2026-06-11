@@ -61,9 +61,17 @@ io.on('connection', (socket) => {
     roomCode
   });
 });
+socket.on('code-update', (data) => {
+  console.log('code-update received', data) 
+  const { roomCode, code } = data;
+  socket.to(roomCode).emit('code-update', code);
+
 });
+});
+
 
 
 httpServer.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+

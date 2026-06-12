@@ -14,6 +14,7 @@ export default function GameRoom({
   const [code, setCode] = useState("");
   const [opponentCode, setOpponentCode] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [problem, setProblem] = useState<any>(null);
 
   const monacoRef = useRef<any>(null);
 
@@ -25,6 +26,23 @@ export default function GameRoom({
     }
   }, [monacoTheme]);
 
+  // Request the problem when page loads
+  useEffect(() => {
+    socket.emit("get-problem", roomCode);
+
+    const handleProblem = (problemData: any) => {
+      console.log("Received problem:", problemData);
+      setProblem(problemData);
+    };
+
+    socket.on("problem", handleProblem);
+
+    return () => {
+      socket.off("problem", handleProblem);
+    };
+  }, [roomCode]);
+
+  // Listen for opponent code updates
   useEffect(() => {
     const handleCodeUpdate = (code: string) => {
       setOpponentCode(code);
@@ -76,6 +94,25 @@ export default function GameRoom({
           {theme === "light" ? "Switch to dark" : "Switch to light"}
         </button>
       </header>
+
+      {problem && (
+        <div
+          style={{
+            padding: "16px",
+            borderBottom: "1px solid #e6e6e6",
+            background: theme === "light" ? "#fafafa" : "#1a1a1a",
+            color: theme === "light" ? "#000" : "#fff",
+          }}
+        >
+          <h2 style={{ marginBottom: "8px" }}>{problem.title}</h2>
+
+          <p style={{ marginBottom: "8px" }}>{problem.description}</p>
+
+          <p>
+            <strong>Difficulty:</strong> {problem.difficulty}
+          </p>
+        </div>
+      )}
 
       <main
         style={{

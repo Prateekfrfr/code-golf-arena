@@ -1,10 +1,12 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { problems } from '../data/problems.js';
 
 
 const app = express();
 const port = 3001;
+
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -56,9 +58,12 @@ io.on('connection', (socket) => {
   room.players.push(socket.id);
 
   socket.join(roomCode);
+  const problem = problems[Math.floor(Math.random() * problems.length)];
+  rooms[roomCode].problem = problem;
 
   io.to(roomCode).emit("room-ready", {
-    roomCode
+    roomCode,
+    problem
   });
 });
 socket.on('code-update', (data) => {
@@ -66,6 +71,12 @@ socket.on('code-update', (data) => {
   const { roomCode, code } = data;
   socket.to(roomCode).emit('code-update', code);
 
+});
+ socket.on('get-problem', (roomCode) => {
+  const room = rooms[roomCode];
+  if (room && room.problem) {
+    socket.emit('problem', room.problem);
+  }
 });
 });
 

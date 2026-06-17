@@ -40,6 +40,8 @@ export const runCode = async (code, language = 'python', input = '', timeout = 5
   });
 
   let output = '';
+  let timeoutId;
+  let timedOut = false;
   const outputStream = new PassThrough();
 
   outputStream.on('data', (chunk) => {
@@ -68,12 +70,27 @@ export const runCode = async (code, language = 'python', input = '', timeout = 5
 
     stream.end();
 
-    await container.wait();
+    await Promise.race([
+      container.wait(),
+      new Promise((resolve) => {
+        timeoutId = setTimeout(async () => {
+          timedOut = true;
+          await container.kill().catch(() => {});
+          resolve(null);
+        }, timeout);
+      })
+    ]);
+
+    if (timedOut) {
+      return `Error: execution timed out after ${timeout}ms`;
+    }
+
     return output.trim();
   } catch (err) {
     console.error('Error running code in Docker container:', err);
     return `Error: ${err.message}`;
   } finally {
+    clearTimeout(timeoutId);
     await container.remove({ force: true }).catch(() => {});
   }
 };

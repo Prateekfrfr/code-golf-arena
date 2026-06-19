@@ -1,97 +1,55 @@
-# 🏌️ Code Golf Arena
+# Code Golf Arena
 
-A competitive platform where developers can solve coding challenges using the **fewest characters possible**. Submit solutions, compete on leaderboards, and sharpen your coding skills through the art of code golf.
+A real-time multiplayer code golf arena where two players receive the same
+problem, race to solve it with the fewest characters, watch each other's code
+live, submit through Docker-isolated judging, and replay the match afterward.
 
-> **Status:** 🚧 Currently under development
+## Current Stack
 
----
+- Next.js App Router and TypeScript
+- Socket.io client/server
+- Express backend
+- Monaco Editor
+- Docker execution via dockerode
+- In-memory repositories prepared for Redis migration
 
-## 📖 About
+## Features
 
-Code Golf Arena is a web platform designed for programmers who enjoy writing concise and creative code. Users can participate in coding challenges, submit solutions in various programming languages, and compete to achieve the shortest valid solution.
+- Private room creation and joining
+- Lobby with copyable room code
+- Real-time code synchronization
+- Monaco editor with Python, JavaScript, C++, and Java language selection
+- Docker sandbox execution with memory limits, process limits, network disabled,
+  and timeout enforcement
+- Stdin/stdout problem judging
+- Character-count scoring and live leaderboard
+- Replay playback with side-by-side editors
+- Anti-cheat telemetry for tab switches, large pastes, and submission spam
+- Dark-first responsive UI for portfolio demos
 
-The project is being built with modern web technologies to provide a fast, responsive, and engaging experience.
+## Getting Started
 
----
-
-## ✨ Planned Features
-
-* 🔐 User Authentication
-* 🏆 Global & Challenge-specific Leaderboards
-* 💻 Multi-language Code Submissions
-* ⚡ Real-time Rankings
-* 📊 User Profiles & Statistics
-* 🎯 Daily and Weekly Challenges
-* 📝 Challenge Creation & Management
-* 🚀 Fast Code Execution & Validation
-* 🌙 Dark Mode Support
-* 📱 Fully Responsive Design
-
----
-
-## 🛠️ Tech Stack
-
-### Frontend
-
-* Next.js
-* React
-* TypeScript
-* Tailwind CSS
-
-### Backend
-
-* Next.js API Routes / Node.js
-* PostgreSQL
-* Prisma ORM
-
-### Authentication
-
-* NextAuth.js / Better Auth
-
-### Deployment
-
-* Vercel
-
-### Future Integrations
-
-* Code execution sandbox
-* Real-time updates with WebSockets
-* AI-powered challenge recommendations
-
----
-
-## 📂 Project Structure
-
-```bash
-code-golf-arena/
-├── app/
-├── components/
-├── lib/
-├── prisma/
-├── public/
-├── types/
-├── hooks/
-└── utils/
-```
-
----
-
-## 🚀 Getting Started
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/your-username/code-golf-arena.git
-cd code-golf-arena
-```
-
-### Install Dependencies
+Install frontend dependencies:
 
 ```bash
 npm install
 ```
 
-### Run Development Server
+Install backend dependencies:
+
+```bash
+cd server
+npm install
+```
+
+Start the backend:
+
+```bash
+cd server
+npm start
+```
+
+Start the frontend in another terminal:
 
 ```bash
 npm run dev
@@ -103,66 +61,42 @@ Open:
 http://localhost:3000
 ```
 
----
+Docker Desktop must be running before submissions can be judged.
 
-## 🎯 Vision
+## Architecture
 
-Code Golf Arena aims to become a place where developers can:
-
-* Practice problem-solving
-* Learn language-specific tricks
-* Compete with other programmers
-* Improve code efficiency and creativity
-* Enjoy programming in a fun, gamified environment
-
----
-
-## 🤝 Contributing
-
-Contributions, suggestions, and feedback are welcome.
-
-```bash
-# Fork the repository
-# Create a feature branch
-git checkout -b feature/amazing-feature
-
-# Commit changes
-git commit -m "Add amazing feature"
-
-# Push branch
-git push origin feature/amazing-feature
+```text
+app/                    Next.js pages
+data/                   Local problem set
+lib/socket.js           Socket.io client singleton
+server/index.js         Socket.io event boundary
+server/executor.js      Docker sandbox runner
+server/judge.js         Test-case judging
+server/antiCheat.js     Anti-cheat event tracking
+server/problemProviders Problem provider abstraction
+server/repositories     In-memory room, replay, and score repositories
+shared/events.js        Shared socket event names
+types/domain.ts         Frontend domain types
 ```
 
----
+## Verification
 
-## 📅 Roadmap
+```bash
+npm run lint
+npm run build
+cd server
+npm run check
+```
 
-### Phase 1
+## Redis Migration Path
 
-* [ ] Authentication
-* [ ] Challenge System
-* [ ] Solution Submission
-* [ ] Basic Leaderboards
+The server already routes state writes through repository modules. Replace the
+in-memory repository implementations with Redis-backed equivalents while
+keeping the Socket.io event layer mostly unchanged.
 
-### Phase 2
+Suggested future stores:
 
-* [ ] User Profiles
-* [ ] Statistics Dashboard
-* [ ] Challenge Categories
-* [ ] Search & Filters
-
-### Phase 3
-
-* [ ] Real-time Competitions
-* [ ] Community Features
-* [ ] AI Challenge Generation
-* [ ] Advanced Analytics
-
----
-
-## 📜 License
-
-This project is licensed under the MIT License.
-
-
-**Code less. Think more. Win shorter. 🏌️**
+- Room repository: room lifecycle, players, status, selected problem
+- Replay repository: append-only player frame streams
+- Score repository: sorted scores per room
+- Anti-cheat repository: counters and event timeline per player

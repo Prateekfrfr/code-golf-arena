@@ -2,33 +2,56 @@
 
 import Editor from "@monaco-editor/react";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { socket } from "../../../lib/socket";
+import { AntiCheatEventTypes, SocketEvents } from "../../../shared/events";
+import type {
+  AntiCheatStats,
+  AntiCheatWarning,
+  Language,
+  LeaderboardEntry,
+  Problem,
+  SubmissionResult,
+} from "../../../types/domain";
 
-interface LeaderboardEntry {
-  score: number;
-  language: string;
-  submittedAt: number;
+type ToastKind = "success" | "error" | "warning";
+
+interface ToastState {
+  message: string;
+  kind: ToastKind;
 }
 
-interface Problem {
-  id: number;
-  title: string;
-  description: string;
-  difficulty: string;
+interface CodeUpdatePayload {
+  code: string;
+  language?: Language;
 }
 
-interface SubmissionResult {
-  output: string;
-  characterCount: number;
-  success: boolean;
+interface MonacoContentChange {
+  changes: Array<{
+    text: string;
+    rangeLength: number;
+  }>;
 }
 
-interface MonacoApi {
-  editor?: {
-    setTheme?: (theme: string) => void;
-  };
+interface MonacoEditorInstance {
+  onDidChangeModelContent?: (
+    listener: (event: MonacoContentChange) => void
+  ) => { dispose: () => void };
 }
+
+const LARGE_PASTE_THRESHOLD = 80;
+const languageOptions: Array<{ value: Language; label: string }> = [
+  { value: "python", label: "Python" },
+  { value: "javascript", label: "JavaScript" },
+  { value: "cpp", label: "C++" },
+  { value: "java", label: "Java" },
+];
+
+const formatElapsed = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
 
 export default function GameRoom({
   params,
@@ -40,30 +63,58 @@ export default function GameRoom({
 
   const [code, setCode] = useState("");
   const [opponentCode, setOpponentCode] = useState("");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [opponentLanguage, setOpponentLanguage] = useState<Language>("python");
   const [problem, setProblem] = useState<Problem | null>(null);
   const [result, setResult] = useState<SubmissionResult | null>(null);
-  const [language, setLanguage] = useState("python");
+  const [language, setLanguage] = useState<Language>("python");
   const [leaderboard, setLeaderboard] = useState<
     Record<string, LeaderboardEntry>
   >({});
+  const [antiCheatStats, setAntiCheatStats] = useState<
+    Record<string, AntiCheatStats>
+  >({});
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const monacoRef = useRef<MonacoApi | null>(null);
-  const monacoTheme = theme === "light" ? "vs" : "vs-dark";
-  const pageBg = theme === "light" ? "#ffffff" : "#111111";
-  const pageText = theme === "light" ? "#000000" : "#ffffff";
-  const panelBg = theme === "light" ? "#fafafa" : "#181818";
-  const border = theme === "light" ? "#e6e6e6" : "#333333";
-
-  useEffect(() => {
-    if (monacoRef.current?.editor?.setTheme) {
-      monacoRef.current.editor.setTheme(monacoTheme);
-    }
-  }, [monacoTheme]);
+  const pasteListenerRef = useRef<{ dispose: () => void } | null>(null);
+  const lastPasteWarningAtRef = useRef(0);
 
   useEffect(() => {
-    socket.emit("rejoin-room", roomCode);
-    socket.emit("get-problem", roomCode);
+    return () => {
+      pasteListenerRef.current?.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    socket.emit(SocketEvents.REJOIN_ROOM, roomCode);
+    socket.emit(SocketEvents.GET_PROBLEM, roomCode);
+    socket.emit(SocketEvents.GET_ANTI_CHEAT_SUMMARY, roomCode);
+  }, [roomCode]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setElapsedSeconds((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) return;
+
+      socket.emit(SocketEvents.ANTI_CHEAT_EVENT, {
+        roomCode,
+        type: AntiCheatEventTypes.TAB_SWITCH,
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [roomCode]);
 
   useEffect(() => {
@@ -71,287 +122,311 @@ export default function GameRoom({
       setProblem(problemData);
     };
 
-    socket.on("problem", handleProblem);
+    const handleCodeUpdate = (payload: CodeUpdatePayload | string) => {
+      if (typeof payload === "string") {
+        setOpponentCode(payload);
+        return;
+      }
 
-    return () => {
-      socket.off("problem", handleProblem);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleCodeUpdate = (nextCode: string) => {
-      setOpponentCode(nextCode);
+      setOpponentCode(payload.code);
+      if (payload.language) setOpponentLanguage(payload.language);
     };
 
-    socket.on("code-update", handleCodeUpdate);
-
-    return () => {
-      socket.off("code-update", handleCodeUpdate);
-    };
-  }, []);
-
-  useEffect(() => {
     const handleSubmissionResult = (nextResult: SubmissionResult) => {
+      setIsSubmitting(false);
       setResult(nextResult);
+      setToast({
+        kind: nextResult.success ? "success" : "error",
+        message: nextResult.success
+          ? `Passed in ${nextResult.characterCount} characters.`
+          : nextResult.output,
+      });
     };
 
-    socket.on("submission-result", handleSubmissionResult);
-
-    return () => {
-      socket.off("submission-result", handleSubmissionResult);
-    };
-  }, []);
-
-  useEffect(() => {
     const handleLeaderboardUpdate = (
       scores: Record<string, LeaderboardEntry>
     ) => {
       setLeaderboard(scores);
     };
 
-    socket.on("leaderboard-update", handleLeaderboardUpdate);
+    const handleAntiCheatWarning = (warning: AntiCheatWarning) => {
+      setAntiCheatStats((current) => ({
+        ...current,
+        [warning.playerId]: warning.stats,
+      }));
+      setToast({
+        kind: "warning",
+        message:
+          warning.type === AntiCheatEventTypes.TAB_SWITCH
+            ? "Tab switch recorded by the match judge."
+            : warning.type === AntiCheatEventTypes.LARGE_PASTE
+              ? "Large paste recorded by the match judge."
+              : "Submission cooldown triggered.",
+      });
+    };
+
+    const handleAntiCheatSummary = (summary: {
+      stats: Record<string, AntiCheatStats>;
+    }) => {
+      setAntiCheatStats(summary.stats || {});
+    };
+
+    const handleError = (message: string) => {
+      setIsSubmitting(false);
+      setToast({ kind: "error", message });
+    };
+
+    socket.on(SocketEvents.PROBLEM, handleProblem);
+    socket.on(SocketEvents.CODE_UPDATE, handleCodeUpdate);
+    socket.on(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
+    socket.on(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
+    socket.on(SocketEvents.ANTI_CHEAT_WARNING, handleAntiCheatWarning);
+    socket.on(SocketEvents.ANTI_CHEAT_SUMMARY, handleAntiCheatSummary);
+    socket.on(SocketEvents.ROOM_ERROR, handleError);
+    socket.on("error", handleError);
 
     return () => {
-      socket.off("leaderboard-update", handleLeaderboardUpdate);
+      socket.off(SocketEvents.PROBLEM, handleProblem);
+      socket.off(SocketEvents.CODE_UPDATE, handleCodeUpdate);
+      socket.off(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
+      socket.off(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
+      socket.off(SocketEvents.ANTI_CHEAT_WARNING, handleAntiCheatWarning);
+      socket.off(SocketEvents.ANTI_CHEAT_SUMMARY, handleAntiCheatSummary);
+      socket.off(SocketEvents.ROOM_ERROR, handleError);
+      socket.off("error", handleError);
     };
   }, []);
 
-  const sortedLeaderboard = Object.entries(leaderboard).sort((a, b) => {
-    if (a[1].score !== b[1].score) {
-      return a[1].score - b[1].score;
-    }
+  useEffect(() => {
+    if (!toast) return;
 
-    return a[1].submittedAt - b[1].submittedAt;
-  });
+    const timeout = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  const sortedLeaderboard = useMemo(() => {
+    return Object.entries(leaderboard).sort((a, b) => {
+      if (a[1].score !== b[1].score) return a[1].score - b[1].score;
+      return a[1].submittedAt - b[1].submittedAt;
+    });
+  }, [leaderboard]);
+
+  const antiCheatEntries = useMemo(() => {
+    return Object.entries(antiCheatStats);
+  }, [antiCheatStats]);
+
+  const emitCodeUpdate = (nextCode: string) => {
+    socket.emit(SocketEvents.CODE_UPDATE, {
+      roomCode,
+      code: nextCode,
+      language,
+    });
+  };
+
+  const emitLargePaste = (charCount: number) => {
+    const now = Date.now();
+    if (now - lastPasteWarningAtRef.current < 1200) return;
+    lastPasteWarningAtRef.current = now;
+
+    socket.emit(SocketEvents.ANTI_CHEAT_EVENT, {
+      roomCode,
+      type: AntiCheatEventTypes.LARGE_PASTE,
+      metadata: { charCount },
+    });
+  };
+
+  const submitCode = () => {
+    setIsSubmitting(true);
+    socket.emit(SocketEvents.SUBMIT_CODE, { roomCode, code, language });
+  };
 
   return (
-    <div
-      style={{
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: pageBg,
-        color: pageText,
-      }}
-    >
-      <header
-        style={{
-          padding: "12px 16px",
-          borderBottom: `1px solid ${border}`,
-          background: pageBg,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <div>
-            <strong>Room:</strong> {roomCode}
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <select
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: "1px solid #cfcfcf",
-                background: theme === "light" ? "#f7f7f7" : "#222222",
-                color: pageText,
-              }}
-            >
-              <option value="python">Python</option>
-              <option value="javascript">JavaScript</option>
-            </select>
-
-            <button
-              onClick={() =>
-                setTheme((prev) => (prev === "light" ? "dark" : "light"))
-              }
-              style={{
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: "1px solid #cfcfcf",
-                background: theme === "light" ? "#f7f7f7" : "#222222",
-                color: pageText,
-                cursor: "pointer",
-              }}
-            >
-              {theme === "light" ? "Dark" : "Light"}
-            </button>
-          </div>
+    <main className="arena-shell app-frame">
+      {toast && (
+        <div className="toast-stack">
+          <div className={`toast toast-${toast.kind}`}>{toast.message}</div>
         </div>
-
-        <div
-          style={{
-            border: `1px solid ${border}`,
-            borderRadius: 8,
-            padding: 12,
-            background: panelBg,
-          }}
-        >
-          <h4 style={{ marginTop: 0, marginBottom: 10 }}>Leaderboard</h4>
-
-          {sortedLeaderboard.map(([socketId, data], index) => (
-            <div
-              key={socketId}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "8px 0",
-                borderBottom:
-                  index !== sortedLeaderboard.length - 1
-                    ? "1px solid rgba(128,128,128,0.2)"
-                    : "none",
-              }}
-            >
-              <span>
-                #{index + 1} {socketId.slice(0, 6)}...
-              </span>
-
-              <strong>{data.score} chars</strong>
-            </div>
-          ))}
-
-          {sortedLeaderboard.length === 0 && (
-            <div style={{ opacity: 0.7 }}>No submissions yet.</div>
-          )}
-        </div>
-      </header>
-
-      {problem && (
-        <section
-          style={{
-            padding: "16px",
-            borderBottom: `1px solid ${border}`,
-            background: panelBg,
-          }}
-        >
-          <h2 style={{ marginBottom: "8px" }}>{problem.title}</h2>
-          <p style={{ marginBottom: "8px", whiteSpace: "pre-line" }}>
-            {problem.description}
-          </p>
-          <p style={{ margin: 0 }}>
-            <strong>Difficulty:</strong> {problem.difficulty}
-          </p>
-        </section>
       )}
 
-      <main
-        style={{
-          flex: 1,
-          display: "flex",
-          position: "relative",
-          minHeight: 0,
-        }}
-      >
-        <div style={{ flex: 1, borderRight: `1px solid ${border}` }}>
-          <Editor
-            onMount={(_, monaco) => {
-              monacoRef.current = monaco;
-            }}
-            height="100%"
-            language={language}
-            value={code}
-            theme={monacoTheme}
-            onChange={(value) => {
-              const newCode = value || "";
-
-              setCode(newCode);
-              socket.emit("code-update", {
-                roomCode,
-                code: newCode,
-              });
-            }}
-          />
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <Editor
-            height="100%"
-            language={language}
-            value={opponentCode}
-            theme={monacoTheme}
-            options={{
-              readOnly: true,
-            }}
-          />
-        </div>
-
-        {result && (
-          <div
-            style={{
-              position: "absolute",
-              bottom: 80,
-              left: "50%",
-              transform: "translateX(-50%)",
-              padding: "12px 16px",
-              background: result.success ? "#e6ffe6" : "#ffe6e6",
-              color: "#111111",
-              borderRadius: 8,
-              minWidth: 320,
-              textAlign: "center",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-            }}
-          >
-            <strong>{result.success ? "Passed" : "Failed"}</strong>
-            <p style={{ margin: 0 }}>Output: {result.output}</p>
-            <p style={{ margin: 0 }}>
-              Character Count: {result.characterCount}
-            </p>
+      <header className="game-header">
+        <div className="brand">
+          <div className="brand-mark">CG</div>
+          <div>
+            <div>Code Golf Arena</div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              Room <span className="room-code">{roomCode}</span>
+            </div>
           </div>
-        )}
+        </div>
 
-        <div
-          style={{
-            position: "absolute",
-            bottom: 20,
-            left: "50%",
-            transform: "translateX(-50%)",
-            display: "flex",
-            gap: 12,
-          }}
-        >
-          <button
-            onClick={() => {
-              socket.emit("submit-code", { roomCode, code, language });
-            }}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 8,
-              border: "1px solid #cfcfcf",
-              background: theme === "light" ? "#4CAF50" : "#388E3C",
-              color: "#ffffff",
-              cursor: "pointer",
-            }}
+        <div className="toolbar">
+          <span className="badge">Time {formatElapsed(elapsedSeconds)}</span>
+          <select
+            className="select"
+            style={{ width: 150 }}
+            value={language}
+            onChange={(event) => setLanguage(event.target.value as Language)}
           >
-            Submit Code
-          </button>
-
+            {languageOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <button
-            onClick={() => {
-              router.push(`/replay/${roomCode}`);
-            }}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 8,
-              border: "1px solid #cfcfcf",
-              background: theme === "light" ? "#2563eb" : "#1d4ed8",
-              color: "#ffffff",
-              cursor: "pointer",
-            }}
+            className="button"
+            onClick={() => router.push(`/replay/${roomCode}`)}
           >
             Replay
           </button>
         </div>
-      </main>
-    </div>
+      </header>
+
+      <section className="problem-strip">
+        <div>
+          {problem ? (
+            <>
+              <div className="eyebrow">{problem.difficulty}</div>
+              <h1>{problem.title}</h1>
+              <p className="muted" style={{ whiteSpace: "pre-line" }}>
+                {problem.description}
+              </p>
+            </>
+          ) : (
+            <div className="stack">
+              <div className="skeleton" style={{ width: "40%" }} />
+              <div className="skeleton" style={{ width: "85%" }} />
+              <div className="skeleton" style={{ width: "68%" }} />
+            </div>
+          )}
+        </div>
+
+        <aside className="leaderboard">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <strong>Leaderboard</strong>
+            <span className="badge">{sortedLeaderboard.length} scores</span>
+          </div>
+
+          {sortedLeaderboard.length === 0 && (
+            <div className="muted">No passing submissions yet.</div>
+          )}
+
+          {sortedLeaderboard.map(([playerId, entry], index) => (
+            <div className="leaderboard-row" key={playerId}>
+              <span>
+                #{index + 1} {playerId.slice(0, 6)}
+              </span>
+              <strong>{entry.score} chars</strong>
+            </div>
+          ))}
+        </aside>
+      </section>
+
+      <section className="editor-grid">
+        <div className="editor-pane">
+          <div className="editor-title">
+            <strong>Your code</strong>
+            <span className="badge">{language}</span>
+          </div>
+          <Editor
+            height="calc(100% - 38px)"
+            language={language}
+            value={code}
+            theme="vs-dark"
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              wordWrap: "on",
+            }}
+            onMount={(editor: MonacoEditorInstance) => {
+              pasteListenerRef.current?.dispose();
+              pasteListenerRef.current = editor.onDidChangeModelContent?.(
+                (event) => {
+                  const insertedChars = event.changes.reduce(
+                    (total, change) => total + change.text.length,
+                    0
+                  );
+                  const replacedChars = event.changes.reduce(
+                    (total, change) => total + change.rangeLength,
+                    0
+                  );
+
+                  if (
+                    insertedChars - replacedChars >= LARGE_PASTE_THRESHOLD ||
+                    event.changes.some(
+                      (change) =>
+                        change.text.length >= LARGE_PASTE_THRESHOLD ||
+                        change.text.includes("\n")
+                    )
+                  ) {
+                    emitLargePaste(insertedChars);
+                  }
+                }
+              ) || null;
+            }}
+            onChange={(value) => {
+              const nextCode = value || "";
+              setCode(nextCode);
+              emitCodeUpdate(nextCode);
+            }}
+          />
+        </div>
+
+        <div className="editor-pane">
+          <div className="editor-title">
+            <strong>Opponent</strong>
+            <span className="badge">{opponentLanguage}</span>
+          </div>
+          <Editor
+            height="calc(100% - 38px)"
+            language={opponentLanguage}
+            value={opponentCode}
+            theme="vs-dark"
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              fontSize: 14,
+              wordWrap: "on",
+            }}
+          />
+        </div>
+      </section>
+
+      <div className="floating-actions">
+        <button
+          className="button button-green"
+          onClick={submitCode}
+          disabled={isSubmitting || !problem}
+        >
+          {isSubmitting ? "Judging..." : "Submit"}
+        </button>
+        {result && (
+          <span className={`button ${result.success ? "" : "button-danger"}`}>
+            {result.success ? "Passed" : "Failed"} | {result.characterCount} chars
+          </span>
+        )}
+      </div>
+
+      {antiCheatEntries.length > 0 && (
+        <aside
+          className="panel stats-panel"
+          style={{ position: "fixed", right: 18, bottom: 18, zIndex: 3 }}
+        >
+          <strong>Integrity stats</strong>
+          {antiCheatEntries.map(([playerId, stats]) => (
+            <div key={playerId} className="muted" style={{ marginTop: 8 }}>
+              {playerId.slice(0, 6)}: tabs {stats.tabSwitches}, pastes{" "}
+              {stats.suspiciousPastes}, spam {stats.submissionSpamAttempts}
+            </div>
+          ))}
+        </aside>
+      )}
+    </main>
   );
 }

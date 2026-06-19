@@ -2,7 +2,7 @@ export const problems = [
   {
     id: 1,
     title: "Sum of Array",
-    description: "Read space-separated integers and print their sum.\nExample: input '1 2 3 4' → output '10'",
+    description: "Read space-separated integers and print their sum.\nExample: input '1 2 3 4' -> output '10'",
     difficulty: "easy",
     testCases: [
       { input: "1 2 3 4", expectedOutput: "10" },
@@ -13,7 +13,7 @@ export const problems = [
   {
     id: 2,
     title: "Reverse String",
-    description: "Read a string and print it reversed.\nExample: input 'hello' → output 'olleh'",
+    description: "Read a string and print it reversed.\nExample: input 'hello' -> output 'olleh'",
     difficulty: "easy",
     testCases: [
       { input: "hello", expectedOutput: "olleh" },
@@ -24,7 +24,7 @@ export const problems = [
   {
     id: 3,
     title: "Find Maximum",
-    description: "Read space-separated integers and print the largest.\nExample: input '1 5 3 9 2' → output '9'",
+    description: "Read space-separated integers and print the largest.\nExample: input '1 5 3 9 2' -> output '9'",
     difficulty: "easy",
     testCases: [
       { input: "1 5 3 9 2", expectedOutput: "9" },
@@ -45,7 +45,7 @@ export const problems = [
   {
     id: 5,
     title: "FizzBuzz",
-    description: "Read a number. Print 'Fizz' if divisible by 3, 'Buzz' if by 5, 'FizzBuzz' if both, else the number.",
+    description: "Read a number. Print Fizz if divisible by 3, Buzz if by 5, FizzBuzz if both, else the number.",
     difficulty: "easy",
     testCases: [
       { input: "3", expectedOutput: "Fizz" },
@@ -89,7 +89,7 @@ export const problems = [
   {
     id: 9,
     title: "Longest Word",
-    description: "Read a sentence and print the longest word. If tie, print the first one.",
+    description: "Read a sentence and print the longest word. If tied, print the first one.",
     difficulty: "medium",
     testCases: [
       { input: "The quick brown fox jumps", expectedOutput: "quick" },
@@ -131,7 +131,7 @@ export const problems = [
   {
     id: 13,
     title: "Shortest Path in Grid",
-    description: "First line: grid dimensions N M. Next N lines: rows of 0s and 1s (1=obstacle).\nPrint the shortest path length from top-left to bottom-right, or -1 if impossible.",
+    description: "First line: grid dimensions N M. Next N lines: rows of 0s and 1s where 1 means obstacle.\nPrint the shortest path length from top-left to bottom-right, or -1 if impossible.",
     difficulty: "hard",
     testCases: [
       { input: "3 3\n0 0 0\n1 1 0\n0 0 0", expectedOutput: "4" },

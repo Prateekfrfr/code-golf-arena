@@ -2,14 +2,23 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import crypto from 'crypto';
-import { problems } from '../data/problems.js';
-import { runCode } from './executor.js';
+import { SocketEvents, AntiCheatEventTypes } from '../shared/events.js';
+import {
+  ANTI_CHEAT_CONFIG,
+  getAntiCheatSummary,
+  recordAntiCheatEvent
+} from './antiCheat.js';
+import { judgeSubmission } from './judge.js';
+import { createProblemProvider } from './problemProviders/index.js';
+import { createReplayRepository } from './repositories/replayRepository.js';
+import { createInMemoryRoomRepository } from './repositories/roomRepository.js';
+import { createScoreRepository } from './repositories/scoreRepository.js';
 
 const app = express();
 const port = 3001;
+const ROOM_CLEANUP_MS = 30 * 60 * 1000;
 
 const httpServer = createServer(app);
-
 const io = new Server(httpServer, {
   cors: {
     origin: 'http://localhost:3000',
@@ -17,51 +26,188 @@ const io = new Server(httpServer, {
   }
 });
 
-const rooms = {};
-const ROOM_CLEANUP_MS = 30 * 60 * 1000;
+const roomRepository = createInMemoryRoomRepository();
+const replayRepository = createReplayRepository();
+const scoreRepository = createScoreRepository();
+const problemProvider = createProblemProvider();
 
-const addConnectedPlayer = (room, socketId) => {
-  room.connectedPlayers = room.connectedPlayers || [];
+const normalizeRoomCode = (roomCodeInput) =>
+  String(roomCodeInput || '').trim().toUpperCase();
 
-  if (!room.connectedPlayers.includes(socketId)) {
-    room.connectedPlayers.push(socketId);
+const createRoomCode = () => {
+  let roomCode;
+
+  do {
+    roomCode = crypto.randomUUID()
+      .replace(/-/g, '')
+      .substring(0, 6)
+      .toUpperCase();
+  } while (roomRepository.has(roomCode));
+
+  return roomCode;
+};
+
+const emitRoomError = (socket, message) => {
+  socket.emit(SocketEvents.ROOM_ERROR, message);
+  socket.emit('error', message);
+};
+
+const getRoomOrError = (socket, roomCodeInput) => {
+  const roomCode = normalizeRoomCode(roomCodeInput);
+  const room = roomRepository.get(roomCode);
+
+  if (!room) {
+    emitRoomError(socket, 'room not found');
+    return { roomCode, room: null };
+  }
+
+  return { roomCode, room };
+};
+
+const scheduleCleanup = (roomCode, room) => {
+  if (room.connectedPlayers.length > 0 || room.cleanupTimer) return;
+
+  room.cleanupTimer = setTimeout(() => {
+    roomRepository.delete(roomCode);
+  }, ROOM_CLEANUP_MS);
+};
+
+const broadcastAntiCheatWarning = (roomCode, playerId, type, metadata = {}) => {
+  const room = roomRepository.get(roomCode);
+  if (!room) return;
+
+  const { stats } = recordAntiCheatEvent(room, playerId, type, metadata);
+
+  io.to(roomCode).emit(SocketEvents.ANTI_CHEAT_WARNING, {
+    playerId,
+    type,
+    stats,
+    metadata
+  });
+};
+
+const handleCreateRoom = (socket) => {
+  const roomCode = createRoomCode();
+  roomRepository.create(roomCode, socket.id);
+  socket.join(roomCode);
+
+  socket.emit(SocketEvents.ROOM_CREATED, roomCode);
+  socket.emit('roomCreated', roomCode);
+};
+
+const handleJoinRoom = async (socket, roomCodeInput) => {
+  const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
+  if (!room) return;
+
+  if (room.players.length >= 2 && !room.players.includes(socket.id)) {
+    emitRoomError(socket, 'room is full');
+    return;
+  }
+
+  roomRepository.clearCleanup(room);
+  roomRepository.addPlayer(room, socket.id);
+  roomRepository.markConnected(room, socket.id);
+  socket.join(roomCode);
+
+  if (room.players.length === 2 && !room.problem) {
+    room.problem = await problemProvider.getRandomProblem();
+    room.startTime = Date.now();
+    room.status = 'active';
+  }
+
+  if (room.players.length === 2) {
+    io.to(roomCode).emit(SocketEvents.ROOM_READY, {
+      roomCode,
+      problem: room.problem,
+      players: room.players
+    });
   }
 };
 
-const createRoomState = (firstPlayerId) => ({
-  players: [firstPlayerId],
-  connectedPlayers: [firstPlayerId],
-  replay: {
-    [firstPlayerId]: []
-  },
-  scores: {},
-  problem: null,
-  startTime: null,
-  cleanupTimer: null
-});
+const handleRejoinRoom = (socket, roomCodeInput) => {
+  const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
+  if (!room) return;
 
-const serializeInput = (input) => {
-  if (typeof input === 'string') return input;
-  return JSON.stringify(input);
+  roomRepository.clearCleanup(room);
+  roomRepository.markConnected(room, socket.id);
+  socket.join(roomCode);
+
+  if (room.problem) {
+    socket.emit(SocketEvents.PROBLEM, room.problem);
+  }
+
+  socket.emit(SocketEvents.LEADERBOARD_UPDATE, scoreRepository.getScores(room));
+  socket.emit(
+    SocketEvents.ANTI_CHEAT_SUMMARY,
+    getAntiCheatSummary(room)
+  );
 };
 
-const normalizeOutput = (value) => {
-  if (typeof value === 'string') return value.trim();
-  return JSON.stringify(value);
-};
+const handleSubmitCode = async (socket, data) => {
+  const { roomCode, room } = getRoomOrError(socket, data?.roomCode);
+  if (!room) return;
 
-const outputsMatch = (actual, expected) => {
-  if (actual == null) return false;
+  const code = String(data?.code || '');
+  const language = data?.language || 'python';
 
-  const actualText = String(actual).trim();
-  const expectedText = normalizeOutput(expected);
+  if (!room.problem) {
+    socket.emit(SocketEvents.SUBMISSION_RESULT, {
+      output: 'Problem not found for this room.',
+      characterCount: code.length,
+      success: false
+    });
+    return;
+  }
 
-  if (actualText === expectedText) return true;
+  const now = Date.now();
+  const lastSubmissionAt = room.lastSubmissionAt[socket.id] || 0;
+  const elapsed = now - lastSubmissionAt;
 
-  try {
-    return JSON.stringify(JSON.parse(actualText)) === JSON.stringify(expected);
-  } catch {
-    return false;
+  if (elapsed < ANTI_CHEAT_CONFIG.submissionCooldownMs) {
+    const cooldownMs = ANTI_CHEAT_CONFIG.submissionCooldownMs - elapsed;
+
+    broadcastAntiCheatWarning(
+      roomCode,
+      socket.id,
+      AntiCheatEventTypes.SUBMISSION_SPAM,
+      { cooldownMs }
+    );
+
+    socket.emit(SocketEvents.SUBMISSION_RESULT, {
+      output: `Submission cooldown active. Try again in ${Math.ceil(
+        cooldownMs / 1000
+      )}s.`,
+      characterCount: code.length,
+      success: false,
+      rateLimited: true,
+      cooldownMs
+    });
+    return;
+  }
+
+  room.lastSubmissionAt[socket.id] = now;
+
+  const result = await judgeSubmission({
+    code,
+    language,
+    problem: room.problem
+  });
+
+  socket.emit(SocketEvents.SUBMISSION_RESULT, result);
+
+  if (!result.success) return;
+
+  const leaderboardChanged = scoreRepository.updateBestScore(room, socket.id, {
+    score: code.length,
+    language,
+    submittedAt: Date.now()
+  });
+
+  if (leaderboardChanged) {
+    io.to(roomCode).emit(
+      SocketEvents.LEADERBOARD_UPDATE,
+      scoreRepository.getScores(room)
+    );
   }
 };
 
@@ -69,202 +215,95 @@ io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
   socket.on('disconnect', () => {
-    for (const roomCode in rooms) {
-      const room = rooms[roomCode];
-
-      room.connectedPlayers = (room.connectedPlayers || []).filter(
-        (id) => id !== socket.id
-      );
-
-      if (room.connectedPlayers.length === 0 && !room.cleanupTimer) {
-        room.cleanupTimer = setTimeout(() => {
-          delete rooms[roomCode];
-        }, ROOM_CLEANUP_MS);
-      }
+    for (const [roomCode, room] of roomRepository.values()) {
+      roomRepository.markDisconnected(room, socket.id);
+      scheduleCleanup(roomCode, room);
     }
 
-    console.log('User disconnected');
+    console.log(`User disconnected: ${socket.id}`);
   });
 
-  socket.on('createRoom', () => {
-    const roomCode = crypto.randomUUID()
-      .replace(/-/g, '')
-      .substring(0, 6)
-      .toUpperCase();
+  socket.on(SocketEvents.CREATE_ROOM, () => handleCreateRoom(socket));
+  socket.on('createRoom', () => handleCreateRoom(socket));
 
-    if (rooms[roomCode]) {
-      socket.emit('roomExists', roomCode);
-      return;
-    }
-
-    rooms[roomCode] = createRoomState(socket.id);
-    socket.join(roomCode);
-    socket.emit('roomCreated', roomCode);
+  socket.on(SocketEvents.JOIN_ROOM, (roomCode) => {
+    handleJoinRoom(socket, roomCode).catch((error) => {
+      console.error('join-room failed:', error);
+      emitRoomError(socket, 'failed to join room');
+    });
   });
 
-  socket.on('join-room', (roomCodeInput) => {
-    const roomCode = String(roomCodeInput || '').trim().toUpperCase();
-    const room = rooms[roomCode];
-
-    if (!room) {
-      socket.emit('error', 'room not found');
-      return;
-    }
-
-    if (room.players.length >= 2 && !room.players.includes(socket.id)) {
-      socket.emit('error', 'room is full');
-      return;
-    }
-
-    if (!room.players.includes(socket.id)) {
-      room.players.push(socket.id);
-      room.replay[socket.id] = [];
-    }
-
-    if (room.cleanupTimer) {
-      clearTimeout(room.cleanupTimer);
-      room.cleanupTimer = null;
-    }
-
-    addConnectedPlayer(room, socket.id);
-    socket.join(roomCode);
-
-    if (room.players.length === 2 && !room.problem) {
-      room.problem = problems[Math.floor(Math.random() * problems.length)];
-      room.startTime = Date.now();
-    }
-
-    if (room.players.length === 2) {
-      io.to(roomCode).emit('room-ready', {
-        roomCode,
-        problem: room.problem
-      });
-    }
+  socket.on(SocketEvents.REJOIN_ROOM, (roomCode) => {
+    handleRejoinRoom(socket, roomCode);
   });
 
-  socket.on('rejoin-room', (roomCodeInput) => {
-    const roomCode = String(roomCodeInput || '').trim().toUpperCase();
-    const room = rooms[roomCode];
-
-    if (!room) {
-      socket.emit('error', 'room not found');
-      return;
-    }
-
-    if (room.cleanupTimer) {
-      clearTimeout(room.cleanupTimer);
-      room.cleanupTimer = null;
-    }
-
-    addConnectedPlayer(room, socket.id);
-    socket.join(roomCode);
-
-    if (room.problem) {
-      socket.emit('problem', room.problem);
-    }
-
-    socket.emit('leaderboard-update', room.scores || {});
-  });
-
-  socket.on('code-update', (data) => {
-    const { roomCode, code } = data;
-    const room = rooms[roomCode];
-
-    socket.to(roomCode).emit('code-update', code);
-
-    if (room?.replay?.[socket.id] !== undefined) {
-      room.replay[socket.id].push({
-        code,
-        timestamp: Date.now() - room.startTime
-      });
-    }
-  });
-
-  socket.on('get-problem', (roomCodeInput) => {
-    const roomCode = String(roomCodeInput || '').trim().toUpperCase();
-    const room = rooms[roomCode];
-
+  socket.on(SocketEvents.GET_PROBLEM, (roomCodeInput) => {
+    const { room } = getRoomOrError(socket, roomCodeInput);
     if (room?.problem) {
-      socket.emit('problem', room.problem);
+      socket.emit(SocketEvents.PROBLEM, room.problem);
     }
   });
 
-  socket.on('submit-code', async (data) => {
-    console.log('submit-code received', data.roomCode);
-    const { roomCode, code, language } = data;
-    const room = rooms[roomCode];
+  socket.on(SocketEvents.CODE_UPDATE, (data) => {
+    const { roomCode, room } = getRoomOrError(socket, data?.roomCode);
+    if (!room) return;
 
-    if (!room?.problem) {
-      socket.emit('submission-result', {
-        output: 'Problem not found for this room.',
-        characterCount: code.length,
+    const code = String(data?.code || '');
+    const language = data?.language || 'python';
+
+    socket.to(roomCode).emit(SocketEvents.CODE_UPDATE, {
+      playerId: socket.id,
+      code,
+      language
+    });
+
+    replayRepository.addFrame(room, socket.id, { code, language });
+  });
+
+  socket.on(SocketEvents.SUBMIT_CODE, (data) => {
+    handleSubmitCode(socket, data).catch((error) => {
+      console.error('submit-code failed:', error);
+      socket.emit(SocketEvents.SUBMISSION_RESULT, {
+        output: 'Internal judging error.',
+        characterCount: String(data?.code || '').length,
         success: false
       });
-      return;
-    }
-
-    const { testCases } = room.problem;
-
-    let lastOutput = '';
-    let allPassed = true;
-
-    for (const testCase of testCases) {
-      const input = serializeInput(testCase.input);
-
-      lastOutput = await runCode(
-        code,
-        language,
-        input
-      );
-
-      if (!outputsMatch(lastOutput, testCase.expectedOutput)) {
-        allPassed = false;
-        break;
-      }
-    }
-
-    socket.emit('submission-result', {
-      output: lastOutput,
-      characterCount: code.length,
-      success: allPassed
     });
+  });
 
-    if (!allPassed) return;
+  socket.on(SocketEvents.GET_REPLAY, (roomCodeInput) => {
+    const { room } = getRoomOrError(socket, roomCodeInput);
+    socket.emit(SocketEvents.REPLAY_DATA, room ? replayRepository.getPayload(room) : null);
+  });
 
-    const existingScore = room.scores[socket.id];
-    let leaderboardChanged = false;
-
-    if (!existingScore || code.length < existingScore.score) {
-      room.scores[socket.id] = {
-        score: code.length,
-        language,
-        submittedAt: Date.now()
-      };
-
-      leaderboardChanged = true;
-    }
-
-    if (leaderboardChanged) {
-      io.to(roomCode).emit('leaderboard-update', room.scores);
+  socket.on(SocketEvents.GET_ANTI_CHEAT_SUMMARY, (roomCodeInput) => {
+    const { room } = getRoomOrError(socket, roomCodeInput);
+    if (room) {
+      socket.emit(SocketEvents.ANTI_CHEAT_SUMMARY, getAntiCheatSummary(room));
     }
   });
 
-  socket.on('get-replay', (roomCodeInput) => {
-    const roomCode = String(roomCodeInput || '').trim().toUpperCase();
-    const room = rooms[roomCode];
+  socket.on(SocketEvents.ANTI_CHEAT_EVENT, (payload = {}) => {
+    const { roomCode, room } = getRoomOrError(socket, payload.roomCode);
+    if (!room) return;
 
-    if (!room) {
-      socket.emit('replay-data', null);
-      return;
+    const type = payload.type;
+    const metadata = payload.metadata || {};
+
+    if (
+      type === AntiCheatEventTypes.TAB_SWITCH ||
+      type === AntiCheatEventTypes.LARGE_PASTE
+    ) {
+      broadcastAntiCheatWarning(roomCode, socket.id, type, metadata);
     }
+  });
 
-    socket.emit('replay-data', {
-      replay: room.replay,
-      problem: room.problem,
-      players: room.players,
-      scores: room.scores || {},
-      startTime: room.startTime
-    });
+  socket.on('tab-switch', ({ roomCode }) => {
+    broadcastAntiCheatWarning(
+      normalizeRoomCode(roomCode),
+      socket.id,
+      AntiCheatEventTypes.TAB_SWITCH
+    );
   });
 });
 

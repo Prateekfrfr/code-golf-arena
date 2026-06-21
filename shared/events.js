@@ -2,6 +2,7 @@ export const SocketEvents = {
   CREATE_ROOM: 'create-room',
   ROOM_CREATED: 'room-created',
   ROOM_EXISTS: 'room-exists',
+  START_SOLO: 'start-solo',
   JOIN_ROOM: 'join-room',
   REJOIN_ROOM: 'rejoin-room',
   ROOM_READY: 'room-ready',
@@ -17,7 +18,7 @@ export const SocketEvents = {
   ANTI_CHEAT_EVENT: 'anti-cheat-event',
   ANTI_CHEAT_WARNING: 'anti-cheat-warning',
   GET_ANTI_CHEAT_SUMMARY: 'get-anti-cheat-summary',
-  ANTI_CHEAT_SUMMARY: 'anti-cheat-summary'
+  ANTI_CHEAT_SUMMARY: 'anti-cheat-summary',
 };
 
 export const AntiCheatEventTypes = {

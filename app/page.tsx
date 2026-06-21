@@ -10,12 +10,13 @@ export default function HomePage() {
   const [joinCode, setJoinCode] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [isStartingSolo, setIsStartingSolo] = useState(false);
   const [toast, setToast] = useState("");
   const [connected, setConnected] = useState(false);
 
   const normalizedJoinCode = useMemo(
     () => joinCode.trim().toUpperCase(),
-    [joinCode]
+    [joinCode],
   );
 
   useEffect(() => {
@@ -26,12 +27,14 @@ export default function HomePage() {
 
     const handleRoomReady = ({ roomCode }: { roomCode: string }) => {
       setIsJoining(false);
+      setIsStartingSolo(false);
       router.push(`/game/${roomCode}`);
     };
 
     const handleError = (message: string) => {
       setIsCreating(false);
       setIsJoining(false);
+      setIsStartingSolo(false);
       setToast(message);
     };
 
@@ -71,6 +74,11 @@ export default function HomePage() {
   const createRoom = () => {
     setIsCreating(true);
     socket.emit(SocketEvents.CREATE_ROOM);
+  };
+
+  const startSolo = () => {
+    setIsStartingSolo(true);
+    socket.emit(SocketEvents.START_SOLO);
   };
 
   const joinRoom = () => {
@@ -169,6 +177,13 @@ export default function HomePage() {
                   disabled={isJoining || !connected}
                 >
                   {isJoining ? "Joining..." : "Join match"}
+                </button>
+                <button
+                  className="button button-green"
+                  onClick={startSolo}
+                  disabled={isStartingSolo || !connected}
+                >
+                  {isStartingSolo ? "Starting..." : "Practice solo"}
                 </button>
               </div>
             </div>

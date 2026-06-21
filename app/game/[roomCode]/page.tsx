@@ -11,6 +11,7 @@ import type {
   Language,
   LeaderboardEntry,
   Problem,
+  RoomMode,
   SubmissionResult,
 } from "../../../types/domain";
 
@@ -24,6 +25,11 @@ interface ToastState {
 interface CodeUpdatePayload {
   code: string;
   language?: Language;
+}
+
+interface RoomReadyPayload {
+  problem?: Problem;
+  mode?: RoomMode;
 }
 
 interface MonacoContentChange {
@@ -65,6 +71,7 @@ export default function GameRoom({
   const [opponentCode, setOpponentCode] = useState("");
   const [opponentLanguage, setOpponentLanguage] = useState<Language>("python");
   const [problem, setProblem] = useState<Problem | null>(null);
+  const [roomMode, setRoomMode] = useState<RoomMode | null>(null);
   const [result, setResult] = useState<SubmissionResult | null>(null);
   const [language, setLanguage] = useState<Language>("python");
   const [leaderboard, setLeaderboard] = useState<
@@ -79,6 +86,7 @@ export default function GameRoom({
 
   const pasteListenerRef = useRef<{ dispose: () => void } | null>(null);
   const lastPasteWarningAtRef = useRef(0);
+  const isSolo = roomMode === "solo";
 
   useEffect(() => {
     return () => {
@@ -101,6 +109,8 @@ export default function GameRoom({
   }, []);
 
   useEffect(() => {
+    if (roomMode !== "multiplayer") return;
+
     const handleVisibilityChange = () => {
       if (!document.hidden) return;
 
@@ -115,11 +125,16 @@ export default function GameRoom({
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [roomCode]);
+  }, [roomCode, roomMode]);
 
   useEffect(() => {
     const handleProblem = (problemData: Problem) => {
       setProblem(problemData);
+    };
+
+    const handleRoomReady = (payload: RoomReadyPayload) => {
+      if (payload.problem) setProblem(payload.problem);
+      setRoomMode(payload.mode || "multiplayer");
     };
 
     const handleCodeUpdate = (payload: CodeUpdatePayload | string) => {
@@ -177,6 +192,7 @@ export default function GameRoom({
     };
 
     socket.on(SocketEvents.PROBLEM, handleProblem);
+    socket.on(SocketEvents.ROOM_READY, handleRoomReady);
     socket.on(SocketEvents.CODE_UPDATE, handleCodeUpdate);
     socket.on(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
     socket.on(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
@@ -187,6 +203,7 @@ export default function GameRoom({
 
     return () => {
       socket.off(SocketEvents.PROBLEM, handleProblem);
+      socket.off(SocketEvents.ROOM_READY, handleRoomReady);
       socket.off(SocketEvents.CODE_UPDATE, handleCodeUpdate);
       socket.off(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
       socket.off(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
@@ -211,11 +228,15 @@ export default function GameRoom({
     });
   }, [leaderboard]);
 
+  const personalBest = socket.id ? leaderboard[socket.id] : null;
+
   const antiCheatEntries = useMemo(() => {
     return Object.entries(antiCheatStats);
   }, [antiCheatStats]);
 
   const emitCodeUpdate = (nextCode: string) => {
+    if (isSolo) return;
+
     socket.emit(SocketEvents.CODE_UPDATE, {
       roomCode,
       code: nextCode,
@@ -224,6 +245,8 @@ export default function GameRoom({
   };
 
   const emitLargePaste = (charCount: number) => {
+    if (isSolo) return;
+
     const now = Date.now();
     if (now - lastPasteWarningAtRef.current < 1200) return;
     lastPasteWarningAtRef.current = now;
@@ -261,6 +284,9 @@ export default function GameRoom({
 
         <div className="toolbar">
           <span className="badge">Time {formatElapsed(elapsedSeconds)}</span>
+          <span className="badge">
+            {isSolo ? "Solo practice" : "Multiplayer"}
+          </span>
           <select
             className="select"
             style={{ width: 150 }}
@@ -309,15 +335,26 @@ export default function GameRoom({
               alignItems: "center",
             }}
           >
-            <strong>Leaderboard</strong>
-            <span className="badge">{sortedLeaderboard.length} scores</span>
+            <strong>{isSolo ? "Your score" : "Leaderboard"}</strong>
+            <span className="badge">
+              {isSolo ? "Practice" : `${sortedLeaderboard.length} scores`}
+            </span>
           </div>
 
-          {sortedLeaderboard.length === 0 && (
+          {isSolo && (
+            <div className="leaderboard-row">
+              <span>Best passing solution</span>
+              <strong>
+                {personalBest ? `${personalBest.score} chars` : "No pass yet"}
+              </strong>
+            </div>
+          )}
+
+          {!isSolo && sortedLeaderboard.length === 0 && (
             <div className="muted">No passing submissions yet.</div>
           )}
 
-          {sortedLeaderboard.map(([playerId, entry], index) => (
+          {!isSolo && sortedLeaderboard.map(([playerId, entry], index) => (
             <div className="leaderboard-row" key={playerId}>
               <span>
                 #{index + 1} {playerId.slice(0, 6)}
@@ -328,7 +365,7 @@ export default function GameRoom({
         </aside>
       </section>
 
-      <section className="editor-grid">
+      <section className={`editor-grid${isSolo ? " editor-grid-solo" : ""}`}>
         <div className="editor-pane">
           <div className="editor-title">
             <strong>Your code</strong>
@@ -378,24 +415,58 @@ export default function GameRoom({
           />
         </div>
 
-        <div className="editor-pane">
-          <div className="editor-title">
-            <strong>Opponent</strong>
-            <span className="badge">{opponentLanguage}</span>
+        {isSolo ? (
+          <div className="practice-panel">
+            <div className="editor-title">
+              <strong>Practice Mode</strong>
+              <span className="badge">Solo</span>
+            </div>
+            <div className="practice-content">
+              <div>
+                <div className="form-label">Goal</div>
+                <p className="muted">
+                  Find the shortest passing solution. Your best character count
+                  is recorded for this room without waiting for an opponent.
+                </p>
+              </div>
+
+              <div>
+                <div className="form-label">Sample tests</div>
+                <div className="test-list">
+                  {problem?.testCases?.length ? (
+                    problem.testCases.map((testCase, index) => (
+                      <div className="test-case" key={`${testCase.input}-${index}`}>
+                        <span>Input: {testCase.input || "(empty)"}</span>
+                        <strong>Output: {testCase.expectedOutput}</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="muted">Tests will appear when the problem loads.</p>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
-          <Editor
-            height="calc(100% - 38px)"
-            language={opponentLanguage}
-            value={opponentCode}
-            theme="vs-dark"
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              fontSize: 14,
-              wordWrap: "on",
-            }}
-          />
-        </div>
+        ) : (
+          <div className="editor-pane">
+            <div className="editor-title">
+              <strong>Opponent</strong>
+              <span className="badge">{opponentLanguage}</span>
+            </div>
+            <Editor
+              height="calc(100% - 38px)"
+              language={opponentLanguage}
+              value={opponentCode}
+              theme="vs-dark"
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                fontSize: 14,
+                wordWrap: "on",
+              }}
+            />
+          </div>
+        )}
       </section>
 
       <div className="floating-actions">
@@ -413,7 +484,7 @@ export default function GameRoom({
         )}
       </div>
 
-      {antiCheatEntries.length > 0 && (
+      {!isSolo && antiCheatEntries.length > 0 && (
         <aside
           className="panel stats-panel"
           style={{ position: "fixed", right: 18, bottom: 18, zIndex: 3 }}

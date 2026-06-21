@@ -2,6 +2,7 @@ export const SocketEvents: {
   CREATE_ROOM: "create-room";
   ROOM_CREATED: "room-created";
   ROOM_EXISTS: "room-exists";
+  START_SOLO: "start-solo";
   JOIN_ROOM: "join-room";
   REJOIN_ROOM: "rejoin-room";
   ROOM_READY: "room-ready";

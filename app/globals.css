@@ -351,6 +351,10 @@ button {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.editor-grid-solo {
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+}
+
 .editor-pane {
   min-width: 0;
   min-height: 0;
@@ -369,6 +373,46 @@ button {
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.practice-panel {
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: rgba(16, 19, 26, 0.58);
+}
+
+.practice-content {
+  display: grid;
+  gap: 22px;
+  padding: 18px;
+}
+
+.practice-content p {
+  line-height: 1.6;
+  margin: 8px 0 0;
+}
+
+.test-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.test-case {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.045);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.test-case span,
+.test-case strong {
+  overflow-wrap: anywhere;
 }
 
 .floating-actions {
@@ -507,6 +551,11 @@ button {
 
   .editor-pane {
     border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .practice-panel {
+    border-left: 0;
     border-bottom: 1px solid var(--line);
   }
 

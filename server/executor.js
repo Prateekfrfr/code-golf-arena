@@ -19,7 +19,7 @@ const languageConfigs = {
     env: () => []
   },
   cpp: {
-    image: 'gcc:14',
+   image: 'gcc:latest',
     cmd: () => [
       'sh',
       '-lc',

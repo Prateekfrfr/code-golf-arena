@@ -1,4 +1,5 @@
 export type Language = "python" | "javascript" | "cpp" | "java";
+export type RoomMode = "multiplayer" | "solo";
 
 export interface TestCase {
   input: string;
@@ -53,4 +54,5 @@ export interface ReplayPayload {
   scores: Record<string, LeaderboardEntry>;
   antiCheatStats: Record<string, AntiCheatStats>;
   startTime: number | null;
+  mode?: RoomMode;
 }

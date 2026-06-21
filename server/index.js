@@ -97,15 +97,12 @@ const handleCreateRoom = (socket) => {
 
 const handleStartSolo = async (socket) => {
   const roomCode = createRoomCode();
-  const room = roomRepository.create(roomCode, socket.id);  // capture the return value
+  const room = roomRepository.create(roomCode, socket.id, 'solo');
   socket.join(roomCode);
 
-  room.mode = 'solo';
   room.problem = await problemProvider.getRandomProblem();
   room.startTime = Date.now();
   room.status = 'active';
-
-  socket.emit(SocketEvents.ROOM_CREATED, roomCode);
 
   io.to(roomCode).emit(SocketEvents.ROOM_READY, {
     roomCode,
@@ -118,6 +115,11 @@ const handleStartSolo = async (socket) => {
 const handleJoinRoom = async (socket, roomCodeInput) => {
   const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
   if (!room) return;
+
+  if (room.mode === 'solo' && !room.players.includes(socket.id)) {
+    emitRoomError(socket, 'room is a solo practice session');
+    return;
+  }
 
   if (room.players.length >= 2 && !room.players.includes(socket.id)) {
     emitRoomError(socket, 'room is full');
@@ -139,7 +141,8 @@ const handleJoinRoom = async (socket, roomCodeInput) => {
     io.to(roomCode).emit(SocketEvents.ROOM_READY, {
       roomCode,
       problem: room.problem,
-      players: room.players
+      players: room.players,
+      mode: room.mode
     });
   }
 };
@@ -154,6 +157,12 @@ const handleRejoinRoom = (socket, roomCodeInput) => {
 
   if (room.problem) {
     socket.emit(SocketEvents.PROBLEM, room.problem);
+    socket.emit(SocketEvents.ROOM_READY, {
+      roomCode,
+      problem: room.problem,
+      players: room.players,
+      mode: room.mode
+    });
   }
 
   socket.emit(SocketEvents.LEADERBOARD_UPDATE, scoreRepository.getScores(room));

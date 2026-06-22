@@ -90,13 +90,72 @@ npm run check
 
 ## Redis Migration Path
 
-The server already routes state writes through repository modules. Replace the
-in-memory repository implementations with Redis-backed equivalents while
-keeping the Socket.io event layer mostly unchanged.
+The current architecture already routes all game state mutations through repository modules, which makes the migration to Redis relatively straightforward. Instead of changing the Socket.io event handlers or game flow logic, the goal is to swap the existing in-memory repository implementations with Redis-backed versions that expose the same interfaces.
 
-Suggested future stores:
+This approach keeps the networking layer stable while allowing state to be shared across multiple server instances, survive process restarts, and support horizontal scaling.
 
-- Room repository: room lifecycle, players, status, selected problem
-- Replay repository: append-only player frame streams
-- Score repository: sorted scores per room
-- Anti-cheat repository: counters and event timeline per player
+### Room Repository
+
+The room repository would become the primary source of truth for active game sessions. It should manage:
+
+* Room creation and deletion
+* Player join/leave events
+* Room status transitions (waiting, countdown, active, finished)
+* Selected coding problem metadata
+* Host information and room configuration
+* Current player list and readiness state
+
+Each room can be stored as a Redis hash, with supporting sets for player membership and room discovery. Room expiration can also be handled through Redis TTLs to automatically clean up abandoned sessions.
+
+### Replay Repository
+
+Currently, replay data exists only in memory for the lifetime of the match. Moving this to Redis enables replay persistence and post-game analysis.
+
+The replay repository would store:
+
+* Player frame updates
+* Position snapshots
+* Movement events
+* Timing information required for replay reconstruction
+
+Redis Streams are a good fit here because replay events are naturally append-only and ordered by time. This allows efficient storage while preserving the exact sequence of player actions.
+
+### Score Repository
+
+Score data is already isolated from the networking layer, making it a natural candidate for Redis Sorted Sets.
+
+Responsibilities include:
+
+* Maintaining live player rankings
+* Fast leaderboard generation
+* Final score calculation
+* Ranking queries during and after a match
+
+Using Sorted Sets allows score updates and ranking lookups to remain efficient even as room sizes increase.
+
+### Anti-Cheat Repository
+
+Anti-cheat state is currently transient and tied to a single server process. Redis would allow detection logic to remain consistent across distributed instances.
+
+Data that could be stored includes:
+
+* Suspicious event counters
+* Rate-limit tracking
+* Invalid movement detections
+* Excessive input frequency metrics
+* Historical violation records
+
+Redis counters and expiration-based keys are particularly useful here, since most anti-cheat checks rely on tracking event frequency within rolling time windows.
+
+### Migration Strategy
+
+A low-risk migration path is to introduce Redis-backed repositories one at a time while preserving the existing repository interfaces. The Socket.io layer should not need significant changes because it already communicates exclusively through repository abstractions.
+
+A possible rollout order would be:
+
+1. Room repository
+2. Score repository
+3. Anti-cheat repository
+4. Replay repository
+
+This sequence moves the most critical shared state first while minimizing operational risk. Once all repositories are backed by Redis, multiple game server instances can safely operate against the same state store, enabling horizontal scaling without major changes to the application architecture.

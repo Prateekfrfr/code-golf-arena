@@ -1,5 +1,13 @@
 export type Language = "python" | "javascript" | "cpp" | "java";
 export type RoomMode = "multiplayer" | "solo";
+export type ProblemTopic =
+  | "arrays"
+  | "strings"
+  | "math"
+  | "dp"
+  | "stacks"
+  | "graphs"
+  | "hashing";
 
 export interface TestCase {
   input: string;
@@ -9,6 +17,7 @@ export interface TestCase {
 export interface Problem {
   id: number;
   title: string;
+  topic: ProblemTopic;
   description: string;
   difficulty: "easy" | "medium" | "hard" | string;
   testCases?: TestCase[];
@@ -55,4 +64,5 @@ export interface ReplayPayload {
   antiCheatStats: Record<string, AntiCheatStats>;
   startTime: number | null;
   mode?: RoomMode;
+  topic?: ProblemTopic | "random";
 }

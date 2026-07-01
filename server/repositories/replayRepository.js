@@ -17,7 +17,8 @@ export const createReplayRepository = () => ({
       scores: room.scores || {},
       antiCheatStats: room.antiCheatStats || {},
       startTime: room.startTime,
-      mode: room.mode
+      mode: room.mode,
+      topic: room.topic
     };
   }
 });

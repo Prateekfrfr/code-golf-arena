@@ -4,6 +4,20 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { socket } from "@/lib/socket";
 import { SocketEvents } from "@/shared/events";
+import type { ProblemTopic } from "@/types/domain";
+
+type TopicChoice = ProblemTopic | "random";
+
+const topicOptions: Array<{ value: TopicChoice; label: string }> = [
+  { value: "random", label: "Random" },
+  { value: "arrays", label: "Arrays" },
+  { value: "strings", label: "Strings" },
+  { value: "math", label: "Math" },
+  { value: "dp", label: "DP" },
+  { value: "stacks", label: "Stacks" },
+  { value: "graphs", label: "Graphs" },
+  { value: "hashing", label: "Hashing" },
+];
 
 export default function HomePage() {
   const router = useRouter();
@@ -13,6 +27,7 @@ export default function HomePage() {
   const [isStartingSolo, setIsStartingSolo] = useState(false);
   const [toast, setToast] = useState("");
   const [connected, setConnected] = useState(false);
+  const [selectedTopic, setSelectedTopic] = useState<TopicChoice>("random");
 
   const normalizedJoinCode = useMemo(
     () => joinCode.trim().toUpperCase(),
@@ -73,12 +88,12 @@ export default function HomePage() {
 
   const createRoom = () => {
     setIsCreating(true);
-    socket.emit(SocketEvents.CREATE_ROOM);
+    socket.emit(SocketEvents.CREATE_ROOM, { topic: selectedTopic });
   };
 
   const startSolo = () => {
     setIsStartingSolo(true);
-    socket.emit(SocketEvents.START_SOLO);
+    socket.emit(SocketEvents.START_SOLO, { topic: selectedTopic });
   };
 
   const joinRoom = () => {
@@ -144,6 +159,26 @@ export default function HomePage() {
                 <p className="muted" style={{ margin: 0 }}>
                   Create a private room or join with a six-character code.
                 </p>
+              </div>
+
+              <div className="stack">
+                <label className="form-label" htmlFor="topic-select">
+                  Problem topic
+                </label>
+                <select
+                  id="topic-select"
+                  className="select"
+                  value={selectedTopic}
+                  onChange={(event) =>
+                    setSelectedTopic(event.target.value as TopicChoice)
+                  }
+                >
+                  {topicOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <button

@@ -315,6 +315,13 @@ button {
   margin: 0;
 }
 
+.topic-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -365,6 +372,11 @@ button {
   border-right: 0;
 }
 
+.editor-pane-with-help {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .editor-title {
   height: 38px;
   display: flex;
@@ -373,6 +385,54 @@ button {
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.editor-body {
+  min-height: 0;
+}
+
+.submit-guide {
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.submit-guide summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.submit-guide-body {
+  display: grid;
+  gap: 12px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 0 14px 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.submit-guide-body ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.format-note {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.format-note p {
+  margin: 6px 0 0;
+  white-space: pre-line;
 }
 
 .practice-panel {
@@ -453,6 +513,68 @@ button {
 
 .toast-warning {
   border-color: rgba(250, 204, 21, 0.48);
+}
+
+.preflight-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 9, 13, 0.82);
+  backdrop-filter: blur(10px);
+}
+
+.preflight-card {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+}
+
+.preflight-card h1 {
+  margin: 8px 0;
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: 1;
+}
+
+.preflight-card p {
+  margin: 0;
+  white-space: pre-line;
+}
+
+.preflight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.preflight-section {
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.preflight-section strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.preflight-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.preflight-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .lobby-layout {
@@ -561,6 +683,14 @@ button {
 
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .preflight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preflight-actions {
+    flex-direction: column-reverse;
   }
 
   .game-header,

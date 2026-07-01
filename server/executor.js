@@ -6,35 +6,48 @@ const dockerClient = new Docker({
 });
 
 const sourceEnv = (code) => `CODE_B64=${Buffer.from(code).toString('base64')}`;
+const inputEnv = (input) => `INPUT_B64=${Buffer.from(input).toString('base64')}`;
+
+const decodeInput = 'printf "%s" "$INPUT_B64" | base64 -d';
+const decodeSource = (target) =>
+  `printf "%s" "$CODE_B64" | base64 -d > ${target}`;
 
 const languageConfigs = {
   python: {
     image: 'python:3.11-alpine',
-    cmd: (code) => ['python', '-c', code],
-    env: () => []
+    cmd: () => [
+      'sh',
+      '-lc',
+      `${decodeSource('/tmp/main.py')} && ${decodeInput} | python /tmp/main.py`
+    ],
+    env: (code, input) => [sourceEnv(code), inputEnv(input)]
   },
   javascript: {
     image: 'node:22-alpine',
-    cmd: (code) => ['node', '-e', code],
-    env: () => []
+    cmd: () => [
+      'sh',
+      '-lc',
+      `${decodeSource('/tmp/main.js')} && ${decodeInput} | node /tmp/main.js`
+    ],
+    env: (code, input) => [sourceEnv(code), inputEnv(input)]
   },
   cpp: {
    image: 'gcc:latest',
     cmd: () => [
       'sh',
       '-lc',
-      'printf "%s" "$CODE_B64" | base64 -d > /tmp/main.cpp && g++ /tmp/main.cpp -O2 -std=c++17 -o /tmp/main && /tmp/main'
+      `${decodeSource('/tmp/main.cpp')} && g++ /tmp/main.cpp -O2 -std=c++17 -o /tmp/main && ${decodeInput} | /tmp/main`
     ],
-    env: (code) => [sourceEnv(code)]
+    env: (code, input) => [sourceEnv(code), inputEnv(input)]
   },
   java: {
     image: 'eclipse-temurin:21-jdk-alpine',
     cmd: () => [
       'sh',
       '-lc',
-      'printf "%s" "$CODE_B64" | base64 -d > /tmp/Main.java && javac /tmp/Main.java && java -cp /tmp Main'
+      `${decodeSource('/tmp/Main.java')} && javac /tmp/Main.java && ${decodeInput} | java -cp /tmp Main`
     ],
-    env: (code) => [sourceEnv(code)]
+    env: (code, input) => [sourceEnv(code), inputEnv(input)]
   }
 };
 
@@ -58,19 +71,15 @@ export const runCode = async (
 
   const container = await dockerClient.createContainer({
     Image: config.image,
-    Cmd: config.cmd(code),
-    Env: config.env(code),
-    OpenStdin: true,
-    AttachStdin: true,
+    Cmd: config.cmd(),
+    Env: config.env(code, input),
     AttachStdout: true,
     AttachStderr: true,
-    StdinOnce: true,
     Tty: false,
     NetworkDisabled: true,
     HostConfig: {
       Memory: 50 * 1024 * 1024,
       PidsLimit: 64,
-      AutoRemove: true,
       NetworkMode: 'none'
     }
   });
@@ -94,7 +103,7 @@ export const runCode = async (
   try {
     const stream = await container.attach({
       stream: true,
-      stdin: true,
+      stdin: false,
       stdout: true,
       stderr: true
     });
@@ -102,15 +111,6 @@ export const runCode = async (
     dockerClient.modem.demuxStream(stream, stdoutStream, stderrStream);
 
     await container.start();
-
-    if (input) {
-      stream.write(input);
-      if (!input.endsWith('\n')) {
-        stream.write('\n');
-      }
-    }
-
-    stream.end();
 
     await Promise.race([
       container.wait(),

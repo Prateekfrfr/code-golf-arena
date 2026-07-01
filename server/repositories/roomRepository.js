@@ -4,8 +4,9 @@ const createAntiCheatStats = () => ({
   submissionSpamAttempts: 0
 });
 
-const createRoomState = (firstPlayerId, mode = 'multiplayer') => ({
+const createRoomState = (firstPlayerId, mode = 'multiplayer', topic = 'random') => ({
   mode,
+  topic,
   players: [firstPlayerId],
   connectedPlayers: [firstPlayerId],
   replay: {
@@ -27,8 +28,8 @@ export const createInMemoryRoomRepository = () => {
   const rooms = new Map();
 
   return {
-    create(roomCode, firstPlayerId, mode) {
-      const room = createRoomState(firstPlayerId, mode);
+    create(roomCode, firstPlayerId, mode, topic) {
+      const room = createRoomState(firstPlayerId, mode, topic);
       rooms.set(roomCode, room);
       return room;
     },

@@ -34,6 +34,9 @@ const problemProvider = createProblemProvider();
 const normalizeRoomCode = (roomCodeInput) =>
   String(roomCodeInput || '').trim().toUpperCase();
 
+const normalizeTopic = (topicInput) =>
+  String(topicInput || 'random').trim().toLowerCase() || 'random';
+
 const createRoomCode = () => {
   let roomCode;
 
@@ -86,21 +89,31 @@ const broadcastAntiCheatWarning = (roomCode, playerId, type, metadata = {}) => {
   });
 };
 
-const handleCreateRoom = (socket) => {
+const handleCreateRoom = (socket, options = {}) => {
   const roomCode = createRoomCode();
-  roomRepository.create(roomCode, socket.id);
+  roomRepository.create(
+    roomCode,
+    socket.id,
+    'multiplayer',
+    normalizeTopic(options.topic)
+  );
   socket.join(roomCode);
 
   socket.emit(SocketEvents.ROOM_CREATED, roomCode);
   socket.emit('roomCreated', roomCode);
 };
 
-const handleStartSolo = async (socket) => {
+const handleStartSolo = async (socket, options = {}) => {
   const roomCode = createRoomCode();
-  const room = roomRepository.create(roomCode, socket.id, 'solo');
+  const room = roomRepository.create(
+    roomCode,
+    socket.id,
+    'solo',
+    normalizeTopic(options.topic)
+  );
   socket.join(roomCode);
 
-  room.problem = await problemProvider.getRandomProblem();
+  room.problem = await problemProvider.getRandomProblem(room.topic);
   room.startTime = Date.now();
   room.status = 'active';
 
@@ -108,7 +121,8 @@ const handleStartSolo = async (socket) => {
     roomCode,
     problem: room.problem,
     players: room.players,
-    mode: room.mode
+    mode: room.mode,
+    topic: room.topic
   });
 };
 
@@ -132,7 +146,7 @@ const handleJoinRoom = async (socket, roomCodeInput) => {
   socket.join(roomCode);
 
   if (room.players.length === 2 && !room.problem) {
-    room.problem = await problemProvider.getRandomProblem();
+    room.problem = await problemProvider.getRandomProblem(room.topic);
     room.startTime = Date.now();
     room.status = 'active';
   }
@@ -142,7 +156,8 @@ const handleJoinRoom = async (socket, roomCodeInput) => {
       roomCode,
       problem: room.problem,
       players: room.players,
-      mode: room.mode
+      mode: room.mode,
+      topic: room.topic
     });
   }
 };
@@ -161,7 +176,8 @@ const handleRejoinRoom = (socket, roomCodeInput) => {
       roomCode,
       problem: room.problem,
       players: room.players,
-      mode: room.mode
+      mode: room.mode,
+      topic: room.topic
     });
   }
 
@@ -252,7 +268,7 @@ io.on('connection', (socket) => {
     console.log(`User disconnected: ${socket.id}`);
   });
 
-  socket.on(SocketEvents.CREATE_ROOM, () => handleCreateRoom(socket));
+  socket.on(SocketEvents.CREATE_ROOM, (options) => handleCreateRoom(socket, options));
   socket.on('createRoom', () => handleCreateRoom(socket));
 
   socket.on(SocketEvents.JOIN_ROOM, (roomCode) => {
@@ -334,7 +350,7 @@ io.on('connection', (socket) => {
       AntiCheatEventTypes.TAB_SWITCH
     );
   });
-  socket.on(SocketEvents.START_SOLO, () => handleStartSolo(socket).catch((error) => {
+  socket.on(SocketEvents.START_SOLO, (options) => handleStartSolo(socket, options).catch((error) => {
     console.error('start-solo failed:', error);
     emitRoomError(socket, 'failed to start solo session');
 }));

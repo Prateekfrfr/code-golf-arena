@@ -1,27 +1,61 @@
+import crypto from 'node:crypto';
+import cors from 'cors';
 import express from 'express';
-import { createServer } from 'http';
+import { createServer } from 'node:http';
 import { Server } from 'socket.io';
-import crypto from 'crypto';
 import { SocketEvents, AntiCheatEventTypes } from '../shared/events.js';
 import {
   ANTI_CHEAT_CONFIG,
   getAntiCheatSummary,
   recordAntiCheatEvent
 } from './antiCheat.js';
+import {
+  AntiCheatActions,
+  createAntiCheatSession,
+  createDefaultAntiCheatRuleEngine,
+  isSessionInvalidated
+} from './antiCheat/index.js';
+import { buildSubmissionAnalytics } from './analytics/summaryBuilder.js';
+import { createDefaultCompressionAnalyzerRegistry } from './compression/index.js';
+import { isAllowedOrigin, serverConfig } from './config.js';
+import { createExecutionQueue } from './execution/executionQueue.js';
 import { judgeSubmission } from './judge.js';
 import { createProblemProvider } from './problemProviders/index.js';
+import { toPublicProblem } from './problems/problemProjection.js';
+import { createSocketRateLimiter } from './rateLimit/socketRateLimiter.js';
 import { createReplayRepository } from './repositories/replayRepository.js';
 import { createInMemoryRoomRepository } from './repositories/roomRepository.js';
 import { createScoreRepository } from './repositories/scoreRepository.js';
+import { createSubmissionRepository } from './repositories/submissionRepository.js';
+import { buildScoreBreakdown } from './scoring/scoreBreakdown.js';
+import { calculateScore } from './scoring/scoreEngine.js';
+import {
+  PayloadValidationError,
+  parseAntiCheatEvent,
+  parseCodeUpdate,
+  parseRoomCode,
+  parseTopic
+} from './validation/payloads.js';
 
 const app = express();
-const port = 3001;
-const ROOM_CLEANUP_MS = 30 * 60 * 1000;
+app.disable('x-powered-by');
+app.use(
+  cors({
+    origin(origin, callback) {
+      callback(
+        isAllowedOrigin(origin) ? null : new Error('Origin is not allowed.'),
+        isAllowedOrigin(origin)
+      );
+    },
+    methods: ['GET']
+  })
+);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
+  maxHttpBufferSize: serverConfig.maxCodeBytes + 16 * 1024,
   cors: {
-    origin: 'http://localhost:3000',
+    origin: serverConfig.corsOrigins,
     methods: ['GET', 'POST']
   }
 });
@@ -29,22 +63,39 @@ const io = new Server(httpServer, {
 const roomRepository = createInMemoryRoomRepository();
 const replayRepository = createReplayRepository();
 const scoreRepository = createScoreRepository();
+const submissionRepository = createSubmissionRepository({
+  maxPerRoom: serverConfig.maxSubmissionRecordsPerRoom
+});
 const problemProvider = createProblemProvider();
+const executionQueue = createExecutionQueue({
+  concurrency: serverConfig.executionConcurrency
+});
+const socketRateLimiter = createSocketRateLimiter();
+const compressionAnalyzers = createDefaultCompressionAnalyzerRegistry();
+const antiCheatRuleEngine = createDefaultAntiCheatRuleEngine();
+const allowedAntiCheatTypes = new Set([
+  AntiCheatEventTypes.FOCUS_LOST,
+  AntiCheatEventTypes.FOCUS_GAINED,
+  AntiCheatEventTypes.FOCUS_CHECK,
+  AntiCheatEventTypes.TAB_SWITCH,
+  AntiCheatEventTypes.PASTE,
+  AntiCheatEventTypes.LARGE_PASTE,
+  AntiCheatEventTypes.DROP_INSERT
+]);
 
-const normalizeRoomCode = (roomCodeInput) =>
-  String(roomCodeInput || '').trim().toUpperCase();
+const PLAYER_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-const normalizeTopic = (topicInput) =>
-  String(topicInput || 'random').trim().toLowerCase() || 'random';
+const getPlayerId = (socket) => socket.data.playerId;
 
 const createRoomCode = () => {
   let roomCode;
 
   do {
-    roomCode = crypto.randomUUID()
-      .replace(/-/g, '')
-      .substring(0, 6)
-      .toUpperCase();
+    roomCode = Array.from({ length: 8 }, () =>
+      ROOM_CODE_ALPHABET[crypto.randomInt(ROOM_CODE_ALPHABET.length)]
+    ).join('');
   } while (roomRepository.has(roomCode));
 
   return roomCode;
@@ -52,19 +103,66 @@ const createRoomCode = () => {
 
 const emitRoomError = (socket, message) => {
   socket.emit(SocketEvents.ROOM_ERROR, message);
-  socket.emit('error', message);
 };
 
-const getRoomOrError = (socket, roomCodeInput) => {
-  const roomCode = normalizeRoomCode(roomCodeInput);
-  const room = roomRepository.get(roomCode);
+const emitRateLimitError = (socket, retryAfterMs) => {
+  emitRoomError(
+    socket,
+    `Too many requests. Try again in ${Math.max(
+      1,
+      Math.ceil(retryAfterMs / 1000)
+    )}s.`
+  );
+};
 
+const consumeRateLimit = (socket, ruleName) => {
+  const identity = `${socket.handshake.address}:${getPlayerId(socket)}`;
+  const result = socketRateLimiter.consume(identity, ruleName);
+  if (!result.allowed) emitRateLimitError(socket, result.retryAfterMs);
+  return result.allowed;
+};
+
+const getRoomOrError = (socket, roomCodeInput, { requireMember = true } = {}) => {
+  let roomCode;
+
+  try {
+    roomCode = parseRoomCode(roomCodeInput);
+  } catch (error) {
+    emitRoomError(socket, error.message);
+    return { roomCode: '', room: null };
+  }
+
+  const room = roomRepository.get(roomCode);
   if (!room) {
-    emitRoomError(socket, 'room not found');
+    emitRoomError(socket, 'Room not found.');
+    return { roomCode, room: null };
+  }
+
+  if (requireMember && !room.players.includes(getPlayerId(socket))) {
+    emitRoomError(socket, 'This session is not a member of the room.');
     return { roomCode, room: null };
   }
 
   return { roomCode, room };
+};
+
+const getPublicRoomPayload = (roomCode, room) => ({
+  roomCode,
+  problem: room.problem ? toPublicProblem(room.problem) : null,
+  players: [...room.players],
+  connectedPlayers: [...room.connectedPlayers],
+  mode: room.mode,
+  topic: room.topic,
+  status: room.status
+});
+
+const loadJudgeProblem = async (topic) => {
+  const candidate = await problemProvider.getRandomProblem(topic);
+  if (!candidate) throw new Error('No problem matched this topic.');
+
+  const judgeProblem = await problemProvider.getJudgeProblem(candidate.slug);
+  if (!judgeProblem) throw new Error('Problem judge bundle was not found.');
+  return judgeProblem;
 };
 
 const scheduleCleanup = (roomCode, room) => {
@@ -72,181 +170,318 @@ const scheduleCleanup = (roomCode, room) => {
 
   room.cleanupTimer = setTimeout(() => {
     roomRepository.delete(roomCode);
-  }, ROOM_CLEANUP_MS);
+    submissionRepository.deleteRoom(roomCode);
+  }, serverConfig.roomCleanupMs);
 };
 
-const broadcastAntiCheatWarning = (roomCode, playerId, type, metadata = {}) => {
-  const room = roomRepository.get(roomCode);
-  if (!room) return;
+const getAntiCheatSession = (roomCode, room, playerId) => {
+  const existing = room.antiCheatSessions[playerId];
+  if (existing) return existing;
 
-  const { stats } = recordAntiCheatEvent(room, playerId, type, metadata);
-
-  io.to(roomCode).emit(SocketEvents.ANTI_CHEAT_WARNING, {
+  const session = createAntiCheatSession({
+    sessionId: `${roomCode}:${playerId}`,
     playerId,
+    startedAt: Date.now()
+  });
+  room.antiCheatSessions[playerId] = session;
+  return session;
+};
+
+const recordIntegrityEvent = (
+  roomCode,
+  room,
+  playerId,
+  type,
+  metadata = {}
+) => {
+  const currentSession = getAntiCheatSession(roomCode, room, playerId);
+  const outcome = antiCheatRuleEngine.processEvent(currentSession, {
+    id: crypto.randomUUID(),
     type,
-    stats,
+    timestamp: Date.now(),
     metadata
   });
+  room.antiCheatSessions[playerId] = outcome.session;
+
+  const legacyType =
+    type === 'submission_attempt' &&
+    outcome.decision.violationsAdded > 0
+      ? AntiCheatEventTypes.SUBMISSION_SPAM
+      : type;
+  const { stats } = recordAntiCheatEvent(
+    room,
+    playerId,
+    legacyType,
+    metadata
+  );
+  if (room.antiCheatEvents.length > 200) {
+    room.antiCheatEvents.splice(0, room.antiCheatEvents.length - 200);
+  }
+
+  if (outcome.decision.action !== AntiCheatActions.NONE) {
+    io.to(roomCode).emit(SocketEvents.ANTI_CHEAT_WARNING, {
+      playerId,
+      type,
+      stats,
+      metadata,
+      decision: outcome.decision,
+      session: {
+        status: outcome.session.status,
+        violationCount: outcome.session.violationCount,
+        invalidatedAt: outcome.session.invalidatedAt,
+        invalidationReason: outcome.session.invalidationReason
+      }
+    });
+  }
+
+  return outcome;
 };
 
+const buildAntiCheatSummary = (room) => ({
+  ...getAntiCheatSummary(room),
+  sessions: Object.fromEntries(
+    Object.entries(room.antiCheatSessions || {}).map(([playerId, session]) => [
+      playerId,
+      {
+        status: session.status,
+        violationCount: session.violationCount,
+        warningCount: session.warningCount,
+        invalidatedAt: session.invalidatedAt,
+        invalidationReason: session.invalidationReason
+      }
+    ])
+  )
+});
+
 const handleCreateRoom = (socket, options = {}) => {
+  if (!consumeRateLimit(socket, 'roomMutation')) return;
+
   const roomCode = createRoomCode();
   roomRepository.create(
     roomCode,
-    socket.id,
+    getPlayerId(socket),
     'multiplayer',
-    normalizeTopic(options.topic)
+    parseTopic(options?.topic)
   );
   socket.join(roomCode);
-
   socket.emit(SocketEvents.ROOM_CREATED, roomCode);
-  socket.emit('roomCreated', roomCode);
 };
 
 const handleStartSolo = async (socket, options = {}) => {
+  if (!consumeRateLimit(socket, 'roomMutation')) return;
+
   const roomCode = createRoomCode();
   const room = roomRepository.create(
     roomCode,
-    socket.id,
+    getPlayerId(socket),
     'solo',
-    normalizeTopic(options.topic)
+    parseTopic(options?.topic)
   );
   socket.join(roomCode);
 
-  room.problem = await problemProvider.getRandomProblem(room.topic);
-  room.startTime = Date.now();
-  room.status = 'active';
+  try {
+    room.problem = await loadJudgeProblem(room.topic);
+    room.startTime = Date.now();
+    room.status = 'active';
+  } catch (error) {
+    roomRepository.delete(roomCode);
+    throw error;
+  }
 
-  io.to(roomCode).emit(SocketEvents.ROOM_READY, {
-    roomCode,
-    problem: room.problem,
-    players: room.players,
-    mode: room.mode,
-    topic: room.topic
-  });
+  io.to(roomCode).emit(
+    SocketEvents.ROOM_READY,
+    getPublicRoomPayload(roomCode, room)
+  );
 };
 
 const handleJoinRoom = async (socket, roomCodeInput) => {
-  const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
+  if (!consumeRateLimit(socket, 'roomMutation')) return;
+
+  const { roomCode, room } = getRoomOrError(socket, roomCodeInput, {
+    requireMember: false
+  });
   if (!room) return;
 
-  if (room.mode === 'solo' && !room.players.includes(socket.id)) {
-    emitRoomError(socket, 'room is a solo practice session');
+  const playerId = getPlayerId(socket);
+  if (room.mode === 'solo' && !room.players.includes(playerId)) {
+    emitRoomError(socket, 'Room is a solo practice session.');
     return;
   }
 
-  if (room.players.length >= 2 && !room.players.includes(socket.id)) {
-    emitRoomError(socket, 'room is full');
+  if (room.players.length >= 2 && !room.players.includes(playerId)) {
+    emitRoomError(socket, 'Room is full.');
     return;
   }
 
   roomRepository.clearCleanup(room);
-  roomRepository.addPlayer(room, socket.id);
-  roomRepository.markConnected(room, socket.id);
+  roomRepository.addPlayer(room, playerId);
+  roomRepository.markConnected(room, playerId);
   socket.join(roomCode);
 
   if (room.players.length === 2 && !room.problem) {
-    room.problem = await problemProvider.getRandomProblem(room.topic);
+    room.problem = await loadJudgeProblem(room.topic);
     room.startTime = Date.now();
     room.status = 'active';
   }
 
   if (room.players.length === 2) {
-    io.to(roomCode).emit(SocketEvents.ROOM_READY, {
-      roomCode,
-      problem: room.problem,
-      players: room.players,
-      mode: room.mode,
-      topic: room.topic
-    });
+    io.to(roomCode).emit(
+      SocketEvents.ROOM_READY,
+      getPublicRoomPayload(roomCode, room)
+    );
   }
 };
 
 const handleRejoinRoom = (socket, roomCodeInput) => {
+  if (!consumeRateLimit(socket, 'roomRead')) return;
+
   const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
   if (!room) return;
 
   roomRepository.clearCleanup(room);
-  roomRepository.markConnected(room, socket.id);
+  roomRepository.markConnected(room, getPlayerId(socket));
   socket.join(roomCode);
 
   if (room.problem) {
-    socket.emit(SocketEvents.PROBLEM, room.problem);
-    socket.emit(SocketEvents.ROOM_READY, {
-      roomCode,
-      problem: room.problem,
-      players: room.players,
-      mode: room.mode,
-      topic: room.topic
-    });
+    socket.emit(SocketEvents.PROBLEM, toPublicProblem(room.problem));
+    socket.emit(
+      SocketEvents.ROOM_READY,
+      getPublicRoomPayload(roomCode, room)
+    );
   }
 
   socket.emit(SocketEvents.LEADERBOARD_UPDATE, scoreRepository.getScores(room));
-  socket.emit(
-    SocketEvents.ANTI_CHEAT_SUMMARY,
-    getAntiCheatSummary(room)
-  );
+  socket.emit(SocketEvents.ANTI_CHEAT_SUMMARY, buildAntiCheatSummary(room));
 };
 
-const handleSubmitCode = async (socket, data) => {
-  const { roomCode, room } = getRoomOrError(socket, data?.roomCode);
+const handleSubmitCode = async (socket, payload) => {
+  if (!consumeRateLimit(socket, 'submission')) return;
+
+  const submission = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
+  const { roomCode, room } = getRoomOrError(socket, submission.roomCode);
   if (!room) return;
 
-  const code = String(data?.code || '');
-  const language = data?.language || 'python';
+  const playerId = getPlayerId(socket);
+  const antiCheatSession = getAntiCheatSession(roomCode, room, playerId);
+  if (isSessionInvalidated(antiCheatSession)) {
+    socket.emit(SocketEvents.SUBMISSION_RESULT, {
+      output: 'This submission session has been invalidated.',
+      characterCount: [...submission.code].length,
+      characterBytes: Buffer.byteLength(submission.code, 'utf8'),
+      success: false,
+      invalidated: true
+    });
+    return;
+  }
 
   if (!room.problem) {
     socket.emit(SocketEvents.SUBMISSION_RESULT, {
       output: 'Problem not found for this room.',
-      characterCount: code.length,
+      characterCount: [...submission.code].length,
+      characterBytes: Buffer.byteLength(submission.code, 'utf8'),
       success: false
     });
     return;
   }
 
-  const now = Date.now();
-  const lastSubmissionAt = room.lastSubmissionAt[socket.id] || 0;
-  const elapsed = now - lastSubmissionAt;
-
-  if (elapsed < ANTI_CHEAT_CONFIG.submissionCooldownMs) {
-    const cooldownMs = ANTI_CHEAT_CONFIG.submissionCooldownMs - elapsed;
-
-    broadcastAntiCheatWarning(
-      roomCode,
-      socket.id,
-      AntiCheatEventTypes.SUBMISSION_SPAM,
-      { cooldownMs }
-    );
-
+  const integrityOutcome = recordIntegrityEvent(
+    roomCode,
+    room,
+    playerId,
+    'submission_attempt'
+  );
+  if (integrityOutcome.decision.violationsAdded > 0) {
+    const remainingMs =
+      integrityOutcome.decision.ruleResults.find(
+        (result) => result.ruleId === 'submission_rate'
+      )?.details?.remainingMs ?? ANTI_CHEAT_CONFIG.submissionCooldownMs;
     socket.emit(SocketEvents.SUBMISSION_RESULT, {
-      output: `Submission cooldown active. Try again in ${Math.ceil(
-        cooldownMs / 1000
+      output: `Submission cooldown active. Try again in ${Math.max(
+        1,
+        Math.ceil(remainingMs / 1000)
       )}s.`,
-      characterCount: code.length,
+      characterCount: [...submission.code].length,
+      characterBytes: Buffer.byteLength(submission.code, 'utf8'),
       success: false,
       rateLimited: true,
-      cooldownMs
+      cooldownMs: remainingMs,
+      invalidated: isSessionInvalidated(integrityOutcome.session)
     });
     return;
   }
 
-  room.lastSubmissionAt[socket.id] = now;
-
-  const result = await judgeSubmission({
-    code,
-    language,
-    problem: room.problem
+  const judgeResult = await executionQueue.run(() =>
+    judgeSubmission({
+      code: submission.code,
+      language: submission.language,
+      problem: room.problem
+    })
+  );
+  const scoreResult = calculateScore({
+    characterCount: judgeResult.characterBytes,
+    runtimeMs: Math.round(judgeResult.runtimeMs)
   });
+  const scoreBreakdown = buildScoreBreakdown(scoreResult);
+  const compression = judgeResult.success
+    ? compressionAnalyzers.analyze(submission.language, submission.code)
+    : null;
+  const storedSubmission = submissionRepository.add(roomCode, {
+    playerId,
+    userId: playerId,
+    problemId: room.problem.slug,
+    language: submission.language,
+    success: judgeResult.success,
+    status: judgeResult.success ? 'accepted' : 'rejected',
+    characterCount: judgeResult.characterBytes,
+    characterBytes: judgeResult.characterBytes,
+    codePointCount: judgeResult.characterCount,
+    runtimeMs: judgeResult.runtimeMs,
+    memoryBytes: judgeResult.memoryBytes,
+    score: scoreResult.score,
+    scoreBreakdown,
+    compression,
+    compressionScore: compression
+      ? Math.round(
+          (compression.estimatedSavings * 1_000_000) /
+            Math.max(1, compression.sourceLength)
+        )
+      : null
+  });
+  const analytics = buildSubmissionAnalytics(
+    submissionRepository.list(roomCode),
+    {
+      userId: playerId,
+      problemId: room.problem.slug,
+      submissionId: storedSubmission.id
+    }
+  );
+  const result = {
+    ...judgeResult,
+    submissionId: storedSubmission.id,
+    score: scoreResult.score,
+    maxScore: scoreResult.maxScore,
+    scoreBreakdown,
+    compression,
+    analytics
+  };
 
   socket.emit(SocketEvents.SUBMISSION_RESULT, result);
+  if (!judgeResult.success) return;
 
-  if (!result.success) return;
-
-  const leaderboardChanged = scoreRepository.updateBestScore(room, socket.id, {
-    score: code.length,
-    language,
-    submittedAt: Date.now()
-  });
+  const leaderboardChanged = scoreRepository.updateBestScore(
+    room,
+    playerId,
+    {
+      submissionId: storedSubmission.id,
+      score: scoreResult.score,
+      characterCount: judgeResult.characterBytes,
+      runtimeMs: judgeResult.runtimeMs,
+      memoryBytes: judgeResult.memoryBytes,
+      language: submission.language,
+      submittedAt: storedSubmission.submittedAt,
+      scoreBreakdown
+    }
+  );
 
   if (leaderboardChanged) {
     io.to(roomCode).emit(
@@ -256,106 +491,174 @@ const handleSubmitCode = async (socket, data) => {
   }
 };
 
+const runSocketHandler = (socket, label, handler) => {
+  Promise.resolve()
+    .then(handler)
+    .catch((error) => {
+      if (error instanceof PayloadValidationError) {
+        emitRoomError(socket, error.message);
+        return;
+      }
+
+      console.error(`${label} failed:`, error);
+      emitRoomError(socket, 'The request could not be completed.');
+    });
+};
+
+io.use((socket, next) => {
+  const guestId = String(socket.handshake.auth?.guestId || '').trim();
+  socket.data.playerId = PLAYER_ID_PATTERN.test(guestId) ? guestId : socket.id;
+  next();
+});
+
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  socket.emit(SocketEvents.SESSION_READY, {
+    playerId: getPlayerId(socket)
+  });
 
   socket.on('disconnect', () => {
+    const playerId = getPlayerId(socket);
     for (const [roomCode, room] of roomRepository.values()) {
-      roomRepository.markDisconnected(room, socket.id);
+      roomRepository.markDisconnected(room, playerId);
       scheduleCleanup(roomCode, room);
     }
-
-    console.log(`User disconnected: ${socket.id}`);
   });
 
-  socket.on(SocketEvents.CREATE_ROOM, (options) => handleCreateRoom(socket, options));
-  socket.on('createRoom', () => handleCreateRoom(socket));
-
-  socket.on(SocketEvents.JOIN_ROOM, (roomCode) => {
-    handleJoinRoom(socket, roomCode).catch((error) => {
-      console.error('join-room failed:', error);
-      emitRoomError(socket, 'failed to join room');
-    });
-  });
-
-  socket.on(SocketEvents.REJOIN_ROOM, (roomCode) => {
-    handleRejoinRoom(socket, roomCode);
-  });
+  socket.on(SocketEvents.CREATE_ROOM, (options) =>
+    runSocketHandler(socket, 'create-room', () =>
+      handleCreateRoom(socket, options)
+    )
+  );
+  socket.on(SocketEvents.START_SOLO, (options) =>
+    runSocketHandler(socket, 'start-solo', () =>
+      handleStartSolo(socket, options)
+    )
+  );
+  socket.on(SocketEvents.JOIN_ROOM, (roomCode) =>
+    runSocketHandler(socket, 'join-room', () =>
+      handleJoinRoom(socket, roomCode)
+    )
+  );
+  socket.on(SocketEvents.REJOIN_ROOM, (roomCode) =>
+    runSocketHandler(socket, 'rejoin-room', () =>
+      handleRejoinRoom(socket, roomCode)
+    )
+  );
 
   socket.on(SocketEvents.GET_PROBLEM, (roomCodeInput) => {
+    if (!consumeRateLimit(socket, 'roomRead')) return;
     const { room } = getRoomOrError(socket, roomCodeInput);
     if (room?.problem) {
-      socket.emit(SocketEvents.PROBLEM, room.problem);
+      socket.emit(SocketEvents.PROBLEM, toPublicProblem(room.problem));
     }
   });
 
-  socket.on(SocketEvents.CODE_UPDATE, (data) => {
-    const { roomCode, room } = getRoomOrError(socket, data?.roomCode);
-    if (!room) return;
+  socket.on(SocketEvents.CODE_UPDATE, (payload) =>
+    runSocketHandler(socket, 'code-update', () => {
+      if (!consumeRateLimit(socket, 'codeUpdate')) return;
+      const update = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
+      const { roomCode, room } = getRoomOrError(socket, update.roomCode);
+      if (!room) return;
 
-    const code = String(data?.code || '');
-    const language = data?.language || 'python';
-
-    socket.to(roomCode).emit(SocketEvents.CODE_UPDATE, {
-      playerId: socket.id,
-      code,
-      language
-    });
-
-    replayRepository.addFrame(room, socket.id, { code, language });
-  });
-
-  socket.on(SocketEvents.SUBMIT_CODE, (data) => {
-    handleSubmitCode(socket, data).catch((error) => {
-      console.error('submit-code failed:', error);
-      socket.emit(SocketEvents.SUBMISSION_RESULT, {
-        output: 'Internal judging error.',
-        characterCount: String(data?.code || '').length,
-        success: false
+      socket.to(roomCode).emit(SocketEvents.CODE_UPDATE, {
+        playerId: getPlayerId(socket),
+        code: update.code,
+        language: update.language
       });
-    });
-  });
+      replayRepository.addFrame(room, getPlayerId(socket), update);
+    })
+  );
+
+  socket.on(SocketEvents.SUBMIT_CODE, (payload) =>
+    runSocketHandler(socket, 'submit-code', () =>
+      handleSubmitCode(socket, payload)
+    )
+  );
 
   socket.on(SocketEvents.GET_REPLAY, (roomCodeInput) => {
+    if (!consumeRateLimit(socket, 'roomRead')) return;
     const { room } = getRoomOrError(socket, roomCodeInput);
-    socket.emit(SocketEvents.REPLAY_DATA, room ? replayRepository.getPayload(room) : null);
+    socket.emit(
+      SocketEvents.REPLAY_DATA,
+      room ? replayRepository.getPayload(room) : null
+    );
   });
 
   socket.on(SocketEvents.GET_ANTI_CHEAT_SUMMARY, (roomCodeInput) => {
+    if (!consumeRateLimit(socket, 'roomRead')) return;
     const { room } = getRoomOrError(socket, roomCodeInput);
     if (room) {
-      socket.emit(SocketEvents.ANTI_CHEAT_SUMMARY, getAntiCheatSummary(room));
+      socket.emit(
+        SocketEvents.ANTI_CHEAT_SUMMARY,
+        buildAntiCheatSummary(room)
+      );
     }
   });
 
-  socket.on(SocketEvents.ANTI_CHEAT_EVENT, (payload = {}) => {
-    const { roomCode, room } = getRoomOrError(socket, payload.roomCode);
-    if (!room) return;
-
-    const type = payload.type;
-    const metadata = payload.metadata || {};
-
-    if (
-      type === AntiCheatEventTypes.TAB_SWITCH ||
-      type === AntiCheatEventTypes.LARGE_PASTE
-    ) {
-      broadcastAntiCheatWarning(roomCode, socket.id, type, metadata);
-    }
-  });
-
-  socket.on('tab-switch', ({ roomCode }) => {
-    broadcastAntiCheatWarning(
-      normalizeRoomCode(roomCode),
-      socket.id,
-      AntiCheatEventTypes.TAB_SWITCH
-    );
-  });
-  socket.on(SocketEvents.START_SOLO, (options) => handleStartSolo(socket, options).catch((error) => {
-    console.error('start-solo failed:', error);
-    emitRoomError(socket, 'failed to start solo session');
-}));
+  socket.on(SocketEvents.ANTI_CHEAT_EVENT, (payload = {}) =>
+    runSocketHandler(socket, 'anti-cheat-event', () => {
+      if (!consumeRateLimit(socket, 'telemetry')) return;
+      const event = parseAntiCheatEvent(payload, allowedAntiCheatTypes);
+      const { roomCode, room } = getRoomOrError(socket, event.roomCode);
+      if (!room) return;
+      recordIntegrityEvent(
+        roomCode,
+        room,
+        getPlayerId(socket),
+        event.type,
+        event.metadata
+      );
+    })
+  );
 });
 
-httpServer.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+app.get('/health', (_request, response) => {
+  response.json({
+    status: 'ok',
+    service: 'code-golf-arena',
+    executionQueue: executionQueue.getStats(),
+    problemProvider: 'local'
+  });
 });
+
+app.get('/api/problems', async (request, response, next) => {
+  try {
+    const result = await problemProvider.listProblems({
+      search: request.query.search,
+      topic: request.query.topic,
+      difficulty: request.query.difficulty,
+      language: request.query.language,
+      tag: request.query.tag,
+      cursor: request.query.cursor,
+      limit: request.query.limit
+    });
+    response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, _request, response, _next) => {
+  void _next;
+  console.error('HTTP request failed:', error);
+  response.status(500).json({ error: 'Internal server error.' });
+});
+
+const pruneInterval = setInterval(() => socketRateLimiter.prune(), 60_000);
+pruneInterval.unref();
+
+httpServer.listen(serverConfig.port, () => {
+  console.log(`Server running on port ${serverConfig.port}`);
+});
+
+const shutdown = () => {
+  clearInterval(pruneInterval);
+  io.close(() => {
+    httpServer.close(() => process.exit(0));
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+};
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

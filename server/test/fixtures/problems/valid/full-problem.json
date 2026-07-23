@@ -1,0 +1,48 @@
+{
+  "title": "Add Two Integers",
+  "slug": "add-two-integers",
+  "statement": "Read two integers and print their sum.",
+  "explanation": "Use the language's integer addition operator.",
+  "examples": [
+    {
+      "input": "2 3",
+      "output": "5"
+    }
+  ],
+  "constraints": [
+    "-1000 <= a, b <= 1000"
+  ],
+  "difficulty": "easy",
+  "topic": "math",
+  "tags": [
+    "math",
+    "arithmetic"
+  ],
+  "starterCode": {
+    "python": ""
+  },
+  "supportedLanguages": [
+    "python"
+  ],
+  "visibleTests": [
+    {
+      "input": "2 3",
+      "expectedOutput": "5"
+    }
+  ],
+  "hiddenTests": [
+    {
+      "input": "-10 4",
+      "expectedOutput": "-6"
+    }
+  ],
+  "edgeCases": [
+    "negative values"
+  ],
+  "timeLimitMs": 1000,
+  "memoryLimitMb": 64,
+  "metadata": {
+    "sourceId": "math-001"
+  },
+  "version": "1"
+}

@@ -1,161 +1,146 @@
 # Code Golf Arena
 
-A real-time multiplayer code golf arena where two players receive the same
-problem, race to solve it with the fewest characters, watch each other's code
-live, submit through Docker-isolated judging, and replay the match afterward.
+Code Golf Arena is a real-time multiplayer code-golf platform built with
+Next.js, Socket.IO, Monaco, and Docker. Players can create private rooms, join
+with a room code, race on the same problem, watch an opponent's code update,
+submit to an isolated judge, compare deterministic scores, and replay the round.
 
-## Current Stack
+## Product capabilities
 
-- Next.js App Router and TypeScript
-- Socket.io client/server
-- Express backend
-- Monaco Editor
-- Docker execution via dockerode
-- In-memory repositories prepared for Redis migration
-
-## Features
-
-- Private room creation and joining
-- Lobby with copyable room code
-- Real-time code synchronization
-- Monaco editor with Python, JavaScript, C++, and Java language selection
-- Docker sandbox execution with memory limits, process limits, network disabled,
-  and timeout enforcement
-- Stdin/stdout problem judging
-- Character-count scoring and live leaderboard
-- Replay playback with side-by-side editors
-- Anti-cheat telemetry for tab switches, large pastes, and submission spam
-- Dark-first responsive UI for portfolio demos
-
-## Getting Started
-
-Install frontend dependencies:
-
-```bash
-npm install
-```
-
-Install backend dependencies:
-
-```bash
-cd server
-npm install
-```
-
-Start the backend:
-
-```bash
-cd server
-npm start
-```
-
-Start the frontend in another terminal:
-
-```bash
-npm run dev
-```
-
-Open:
-
-```bash
-http://localhost:3000
-```
-
-Docker Desktop must be running before submissions can be judged.
+- Multiplayer rooms and solo practice with reconnect-safe guest identity
+- Python, JavaScript, C++, and Java execution
+- Docker isolation with disabled networking, non-root execution, read-only
+  root filesystems, dropped capabilities, process/CPU/memory/output limits, and
+  a bounded concurrency queue
+- Versioned fixed-point scoring using UTF-8 bytes and runtime
+- Stored score breakdowns, immutable per-room attempts, percentiles, personal
+  and room bests, trends, timelines, and language rankings
+- Pluggable compression analyzers with safe golfing suggestions per language
+- Extensible anti-cheat rules for focus duration, paste/drop attempts, and
+  submission rate, including warning, final-warning, and invalidation states
+- Provider-backed problem discovery with search, filters, and pagination
+- Public/judge problem projections that never expose hidden tests
+- Filesystem, GitHub, database, and local problem-provider adapters
+- Validated import planning with fingerprints, duplicate detection, immutable
+  versions, dry runs, archival, and SPDX license policy
+- Responsive, accessible dark product UI with skeleton, error, and empty states
 
 ## Architecture
 
 ```text
-app/                    Next.js pages
-data/                   Local problem set
-lib/socket.js           Socket.io client singleton
-server/index.js         Socket.io event boundary
-server/executor.js      Docker sandbox runner
-server/judge.js         Test-case judging
-server/antiCheat.js     Anti-cheat event tracking
-server/problemProviders Problem provider abstraction
-server/repositories     In-memory room, replay, and score repositories
-shared/events.js        Shared socket event names
-types/domain.ts         Frontend domain types
+app/                         Next.js App Router product surfaces
+components/                  Shared application shell and UI primitives
+hooks/                       Socket connection and transient-state hooks
+lib/socket.js                Reconnect-safe Socket.IO client
+data/problems.js             Small bundled development catalog
+server/index.js              Socket and HTTP boundaries
+server/executor.js           Hardened Docker execution adapter
+server/judge.js              Structured multi-test judge
+server/scoring/              Versioned deterministic score engine
+server/analytics/            Submission analytics builder
+server/compression/          Pluggable language analyzers
+server/antiCheat/            Rule engine and session state
+server/problemProviders/     Local, filesystem, GitHub, and DB adapters
+server/problemImport/        Validation, dedupe, versioning, and sync planning
+server/problems/             Canonical schema, catalog, public projections
+server/repositories/         Current in-memory room/replay/score/submission state
+shared/events.*              Shared event names
+types/domain.ts              Frontend domain contracts
 ```
+
+Socket.IO remains the live room transport. Cacheable discovery reads are served
+from `GET /api/problems`. The backend has explicit repository seams so Redis
+and PostgreSQL adapters can replace in-memory state without changing the UI
+contract.
+
+## Local setup
+
+Requirements:
+
+- Node.js 20.9 through 24
+- npm 10
+- Docker Desktop with the Docker Engine pipe available
+
+Install and configure:
+
+```bash
+npm ci
+npm --prefix server ci
+copy .env.example .env.local
+```
+
+Run the backend and frontend in separate terminals:
+
+```bash
+npm run dev:server
+npm run dev
+```
+
+Open `http://localhost:3000`. The backend listens on
+`http://localhost:3001` by default.
+
+The executor downloads configured language images on first use. Production
+deployments should replace image tags in `.env.example` with reviewed immutable
+digests and run the executor on a dedicated worker host.
+
+## Scoring
+
+`code-golf-v1` produces a higher-is-better integer score from 0 to 1,000,000:
+
+- UTF-8 byte count: 80%
+- total judge runtime: 20%
+
+Each component is clamped to a configured range, normalized with integer
+fixed-point arithmetic, and weighted in basis points. Every submission stores
+the score, raw metrics, component contributions, and configuration version.
+Future memory, compression, token-count, or complexity components can be added
+through `createScoreConfig` without changing the ranking service.
+
+## Problem providers and imports
+
+The bundled catalog contains 15 development problems. It intentionally does not
+bundle a scraped or license-unclear 200+ problem dataset.
+
+Provider interfaces support:
+
+- local in-process records
+- bounded JSON files under an approved filesystem root
+- allowlisted GitHub owners at a pinned full commit SHA
+- an injected database repository
+
+Import infrastructure validates the canonical schema, normalizes records,
+computes SHA-256 fingerprints, detects duplicates, plans immutable versions,
+supports dry-run and archive-on-removal behavior, and validates license and
+attribution metadata before writes.
+
+See [Problem sources and licensing](docs/PROBLEM_SOURCES.md) before connecting an
+external repository.
 
 ## Verification
 
 ```bash
+npm run problems:validate
+npm run test
 npm run lint
+npm run typecheck
+npm run check:server
 npm run build
-cd server
-npm run check
 ```
 
-## Redis Migration Path
+`npm run check` runs the full sequence.
 
-The current architecture already routes all game state mutations through repository modules, which makes the migration to Redis relatively straightforward. Instead of changing the Socket.io event handlers or game flow logic, the goal is to swap the existing in-memory repository implementations with Redis-backed versions that expose the same interfaces.
+## Production persistence path
 
-This approach keeps the networking layer stable while allowing state to be shared across multiple server instances, survive process restarts, and support horizontal scaling.
+Room, replay, score, and submission repositories are currently bounded
+in-memory adapters for local demos. A production deployment should use:
 
-### Room Repository
+- Redis for room membership, TTLs, live scores, anti-cheat session state,
+  replay streams, rate limits, and the Socket.IO adapter
+- PostgreSQL for users, problem versions, test cases, immutable submissions,
+  score configurations, source sync runs, and durable analytics
+- a dedicated execution worker/queue separated from the public Socket.IO
+  process
+- authenticated user sessions in place of the current random guest identity
 
-The room repository would become the primary source of truth for active game sessions. It should manage:
-
-* Room creation and deletion
-* Player join/leave events
-* Room status transitions (waiting, countdown, active, finished)
-* Selected coding problem metadata
-* Host information and room configuration
-* Current player list and readiness state
-
-Each room can be stored as a Redis hash, with supporting sets for player membership and room discovery. Room expiration can also be handled through Redis TTLs to automatically clean up abandoned sessions.
-
-### Replay Repository
-
-Currently, replay data exists only in memory for the lifetime of the match. Moving this to Redis enables replay persistence and post-game analysis.
-
-The replay repository would store:
-
-* Player frame updates
-* Position snapshots
-* Movement events
-* Timing information required for replay reconstruction
-
-Redis Streams are a good fit here because replay events are naturally append-only and ordered by time. This allows efficient storage while preserving the exact sequence of player actions.
-
-### Score Repository
-
-Score data is already isolated from the networking layer, making it a natural candidate for Redis Sorted Sets.
-
-Responsibilities include:
-
-* Maintaining live player rankings
-* Fast leaderboard generation
-* Final score calculation
-* Ranking queries during and after a match
-
-Using Sorted Sets allows score updates and ranking lookups to remain efficient even as room sizes increase.
-
-### Anti-Cheat Repository
-
-Anti-cheat state is currently transient and tied to a single server process. Redis would allow detection logic to remain consistent across distributed instances.
-
-Data that could be stored includes:
-
-* Suspicious event counters
-* Rate-limit tracking
-* Invalid movement detections
-* Excessive input frequency metrics
-* Historical violation records
-
-Redis counters and expiration-based keys are particularly useful here, since most anti-cheat checks rely on tracking event frequency within rolling time windows.
-
-### Migration Strategy
-
-A low-risk migration path is to introduce Redis-backed repositories one at a time while preserving the existing repository interfaces. The Socket.io layer should not need significant changes because it already communicates exclusively through repository abstractions.
-
-A possible rollout order would be:
-
-1. Room repository
-2. Score repository
-3. Anti-cheat repository
-4. Replay repository
-
-This sequence moves the most critical shared state first while minimizing operational risk. Once all repositories are backed by Redis, multiple game server instances can safely operate against the same state store, enabling horizontal scaling without major changes to the application architecture.
+The current repository interfaces and immutable submission/score payloads are
+designed for that migration.

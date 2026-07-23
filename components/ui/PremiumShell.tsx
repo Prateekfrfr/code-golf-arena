@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 type NavItem = {
@@ -11,7 +12,8 @@ type NavItem = {
 };
 
 const defaultNavItems: NavItem[] = [
-  { label: "Home", href: "/", active: true, marker: "cd" },
+  { label: "Home", href: "/", marker: "cd" },
+  { label: "Problems", href: "/problems", marker: "{}" },
 ];
 
 export function PremiumShell({
@@ -27,9 +29,13 @@ export function PremiumShell({
   compact?: boolean;
   status?: ReactNode;
 }) {
+  const pathname = usePathname();
+
   return (
-    <main className={compact ? "premium-shell premium-shell-compact" : "premium-shell"}>
-      <aside className="sidebar">
+    <div
+      className={compact ? "premium-shell premium-shell-compact" : "premium-shell"}
+    >
+      <aside className="sidebar" aria-label="Application">
         <Link className="brand brand-premium" href="/">
           <span className="brand-mark">CG</span>
           <span>
@@ -40,6 +46,11 @@ export function PremiumShell({
 
         <nav className="sidebar-nav" aria-label="Primary navigation">
           {navItems.map((item) => {
+            const isActive =
+              item.active ??
+              (item.href === "/"
+                ? pathname === "/"
+                : Boolean(item.href && pathname.startsWith(item.href)));
             const content = (
               <>
                 <span className="nav-marker">{item.marker || "//"}</span>
@@ -51,8 +62,9 @@ export function PremiumShell({
               return (
                 <Link
                   key={item.label}
-                  className={item.active ? "sidebar-link active" : "sidebar-link"}
+                  className={isActive ? "sidebar-link active" : "sidebar-link"}
                   href={item.href}
+                  aria-current={isActive ? "page" : undefined}
                 >
                   {content}
                 </Link>
@@ -62,7 +74,7 @@ export function PremiumShell({
             return (
               <span
                 key={item.label}
-                className={item.active ? "sidebar-link active" : "sidebar-link"}
+                className={isActive ? "sidebar-link active" : "sidebar-link"}
               >
                 {content}
               </span>
@@ -70,16 +82,18 @@ export function PremiumShell({
           })}
         </nav>
 
-        <div className="sidebar-status">
-          {status}
-        </div>
+        {status && (
+          <div className="sidebar-status" role="status" aria-live="polite">
+            {status}
+          </div>
+        )}
       </aside>
 
-      <section className="workspace">
+      <main className="workspace" id="main-content" tabIndex={-1}>
         {topbar}
         <div className="workspace-body">{children}</div>
-      </section>
-    </main>
+      </main>
+    </div>
   );
 }
 
@@ -121,10 +135,78 @@ export function EmptyState({
   description: string;
 }) {
   return (
-    <div className="empty-state">
-      <span className="empty-marker">∅</span>
+    <div className="empty-state" role="status">
+      <span className="empty-marker" aria-hidden="true">
+        ∅
+      </span>
       <strong>{title}</strong>
       <span>{description}</span>
     </div>
+  );
+}
+
+export function ConnectionStatus({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className={connected ? "status-pill live" : "status-pill"}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="status-dot" aria-hidden="true" />
+      {connected ? "socket connected" : "socket reconnecting"}
+    </span>
+  );
+}
+
+export function ToastRegion({
+  message,
+  tone = "error",
+}: {
+  message: string;
+  tone?: "error" | "info" | "success";
+}) {
+  if (!message) return null;
+
+  return (
+    <div className="toast-stack" aria-live="assertive" aria-atomic="true">
+      <div className={`toast toast-${tone}`} role="alert">
+        {message}
+      </div>
+    </div>
+  );
+}
+
+export function PageState({
+  eyebrow,
+  title,
+  description,
+  action,
+  loading = false,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  action?: ReactNode;
+  loading?: boolean;
+}) {
+  return (
+    <SurfaceCard className="page-state">
+      <div className="page-state-mark" aria-hidden="true">
+        {loading ? "…" : "//"}
+      </div>
+      <div role="status" aria-live={loading ? "polite" : "off"}>
+        <div className="eyebrow">{eyebrow}</div>
+        <h1>{title}</h1>
+        <p className="muted">{description}</p>
+      </div>
+      {loading && (
+        <div className="stack" aria-hidden="true">
+          <div className="skeleton skeleton-short" />
+          <div className="skeleton" />
+          <div className="skeleton skeleton-medium" />
+        </div>
+      )}
+      {action && <div className="page-state-action">{action}</div>}
+    </SurfaceCard>
   );
 }

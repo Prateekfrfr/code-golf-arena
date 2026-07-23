@@ -1,79 +1,37 @@
-# HANDOFF
+# Code Golf Arena handoff
 
-## Files changed
-- `components/ui/PremiumShell.tsx`
-- `app/page.tsx`
-- `app/game/[roomCode]/page.tsx`
-- `app/globals.css`
-- `next.config.ts`
-- `HANDOFF.md`
+## Current state
 
-## Completed work
-- Inspected project routes, socket events, problem data, judge/executor support, and shared domain types before changing UI.
-- Removed homepage dummy UI: fake stats, fake featured problems, fake activity, fake top players, and non-existent nav entries.
-- Simplified primary shell navigation to only the verified `/` route.
-- Reworked homepage into a real start/join control surface backed by existing socket events.
-- Reworked game sidebar from fake analytics/runtime/memory/suggestions into real attempt bytes, par delta, local submission history, actual leaderboard updates, and anti-cheat summaries.
-- Fixed opponent code display to handle the backend's real `code-update` payload object.
-- Fixed React `NaN` children warning by handling the backend's real anti-cheat summary shape: `{ stats, events }`.
-- Exposed all languages supported by the existing executor: Python, JavaScript, C++, Java.
-- Replaced accumulated dashboard CSS with a smaller dark, terminal-inspired style system for existing home/lobby/game/replay screens.
-- Pinned `turbopack.root` in `next.config.ts` after Next warned about parent lockfile root inference.
-- Installed frontend and server dependencies from existing lockfiles so verification and local testing could run.
-- Started local dev servers:
-  - Frontend: `http://localhost:3000`
-  - Socket backend: `http://localhost:3001`
+The production-upgrade pass is implemented across the Next.js UI, Socket.IO
+backend, Docker judge, scoring and analytics modules, anti-cheat system, problem
+provider/import pipeline, and operational documentation.
 
-## Backend endpoints/routes found
-- Socket events used by frontend/backend:
-  - `create-room`
-  - `room-created`
-  - `start-solo`
-  - `join-room`
-  - `rejoin-room`
-  - `room-ready`
-  - `room-error`
-  - `get-problem`
-  - `problem`
-  - `code-update`
-  - `submit-code`
-  - `submission-result`
-  - `leaderboard-update`
-  - `get-replay`
-  - `replay-data`
-  - `anti-cheat-event`
-  - `anti-cheat-warning`
-  - `get-anti-cheat-summary`
-  - `anti-cheat-summary`
-- Verified app pages:
-  - `/`
-  - `/lobby/[roomCode]`
-  - `/game/[roomCode]`
-  - `/replay/[roomCode]`
+Verification covers repository linting, TypeScript, 48 Node tests, server syntax
+checks, problem-catalog validation, dependency audits, the Next.js production
+build, HTTP health/discovery, and a Socket.IO room lifecycle smoke test.
 
-## Unknown endpoints
-- None intentionally used. No REST API routes were found in the frontend/server inspection.
+## Important production boundaries
 
-## Bugs found/fixed
-- Fixed frontend opponent-code handler: backend emits `{ playerId, code, language }`, but UI expected a raw string.
-- Removed fake judge metrics (`42ms`, `18mb`, percentile, suggestions) that were not present in `submission-result`.
-- Fixed anti-cheat summary handling: backend emits `{ stats, events }`, while the UI previously treated the entire payload as `Record<string, AntiCheatStats>`, causing `warningTotals` to become `NaN`.
+- Runtime room, replay, score, and submission repositories are still in memory.
+  Replace them with PostgreSQL and Redis adapters before horizontal scaling.
+- Guest identities are reconnect-stable but unauthenticated. Add account auth
+  before public competitive events or durable profiles.
+- The bundled catalog is intentionally small. Import a reviewed, licensed
+  dataset through the provider/import pipeline to reach the target catalog size.
+- Pin executor images to immutable registry digests in production.
+- Run code execution on dedicated worker hosts with monitoring and deployment
+  controls; do not colocate untrusted workloads with the web tier.
 
-## Assumptions
-- "Auth, profile, problems, contests, submissions" in the prompt refer to desired preserved functionality broadly, but this repository currently only contains room/lobby/game/replay functionality with socket-based judging.
-- Existing lobby/replay inline styles are functional and route-backed; they may be further cleaned up without feature changes.
+## Local commands
 
-## Files remaining
-- Optional cleanup pass on `app/lobby/[roomCode]/page.tsx` and `app/replay/[roomCode]/page.tsx` to remove inline styles and align visual polish.
-- Optional manual browser QA after local servers are running.
+```bash
+npm ci
+npm --prefix server ci
+npm run check
+npm run problems:validate
+npm run dev:server
+npm run dev
+```
 
-## Build/lint status
-- `npm run lint`: passed.
-- `npm run build`: passed.
-- `npm run check:server`: passed.
-- Smoke check:
-  - `curl -I http://localhost:3000`: `200 OK`
-  - `curl -I http://localhost:3001`: `404 Not Found`, expected for Express root because no REST route is defined.
-
-## Exact next step
-- Manual browser QA of create-room, join-room, solo practice, submit, leaderboard, and replay flows against the running local servers.
+See `README.md`, `.env.example`, and `docs/PROBLEM_SOURCES.md` for setup,
+provider, licensing, and deployment guidance.

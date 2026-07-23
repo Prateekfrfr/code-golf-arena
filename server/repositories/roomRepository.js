@@ -16,6 +16,7 @@ const createRoomState = (firstPlayerId, mode = 'multiplayer', topic = 'random') 
   antiCheatStats: {
     [firstPlayerId]: createAntiCheatStats()
   },
+  antiCheatSessions: {},
   antiCheatEvents: [],
   lastSubmissionAt: {},
   problem: null,

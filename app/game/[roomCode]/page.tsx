@@ -2,34 +2,25 @@
 
 import Editor from "@monaco-editor/react";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { socket } from "../../../lib/socket";
 import {
   EmptyState,
   PremiumShell,
-  StatCard,
   SurfaceCard,
   TopNav,
 } from "@/components/ui/PremiumShell";
-
-interface LeaderboardEntry {
-  score: number;
-  language: string;
-  submittedAt: number;
-}
-
-interface Problem {
-  id: number;
-  title: string;
-  description: string;
-  difficulty: string;
-}
-
-interface SubmissionResult {
-  output: string;
-  characterCount: number;
-  success: boolean;
-}
+import { SocketEvents } from "../../../shared/events";
+import type {
+  AntiCheatStats,
+  AntiCheatSummary,
+  AntiCheatWarning,
+  Language,
+  LeaderboardEntry,
+  Problem,
+  RoomMode,
+  SubmissionResult,
+} from "@/types/domain";
 
 interface MonacoApi {
   editor?: {
@@ -43,6 +34,38 @@ interface SubmissionHistoryEntry {
   success: boolean;
 }
 
+const emptyAntiCheatStats: AntiCheatStats = {
+  tabSwitches: 0,
+  suspiciousPastes: 0,
+  submissionSpamAttempts: 0,
+};
+
+const finiteNumber = (value: number | undefined) =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+const normalizeAntiCheatStats = (
+  stats?: Partial<AntiCheatStats>,
+): AntiCheatStats => {
+  return {
+    tabSwitches: finiteNumber(stats?.tabSwitches),
+    suspiciousPastes: finiteNumber(stats?.suspiciousPastes),
+    submissionSpamAttempts: finiteNumber(stats?.submissionSpamAttempts),
+  };
+};
+
+const normalizeAntiCheatSummary = (
+  summary: AntiCheatSummary | Record<string, AntiCheatStats>,
+) => {
+  const stats = "stats" in summary ? summary.stats : summary;
+
+  return Object.fromEntries(
+    Object.entries(stats || {}).map(([playerId, playerStats]) => [
+      playerId,
+      normalizeAntiCheatStats(playerStats),
+    ]),
+  );
+};
+
 export default function GameRoom({
   params,
 }: {
@@ -53,10 +76,11 @@ export default function GameRoom({
 
   const [code, setCode] = useState("");
   const [opponentCode, setOpponentCode] = useState("");
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [problem, setProblem] = useState<Problem | null>(null);
   const [result, setResult] = useState<SubmissionResult | null>(null);
-  const [language, setLanguage] = useState("python");
+  const [language, setLanguage] = useState<Language>("python");
+  const [connected, setConnected] = useState(false);
+  const [roomMode, setRoomMode] = useState<RoomMode>("multiplayer");
   const [leaderboard, setLeaderboard] = useState<
     Record<string, LeaderboardEntry>
   >({});
@@ -64,15 +88,26 @@ export default function GameRoom({
     SubmissionHistoryEntry[]
   >([]);
   const [warning, setWarning] = useState(0);
+  const [antiCheatStats, setAntiCheatStats] = useState<
+    Record<string, AntiCheatStats>
+  >({});
 
   const monacoRef = useRef<MonacoApi | null>(null);
-  const monacoTheme = theme === "light" ? "vs" : "vs-dark";
-  const par = problem?.difficulty === "hard" ? 150 : problem?.difficulty === "easy" ? 72 : 120;
+  const monacoTheme = "vs-dark";
+  const par =
+    problem?.difficulty === "hard"
+      ? 150
+      : problem?.difficulty === "easy"
+        ? 72
+        : 120;
 
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        socket.emit("tab-switch", { roomCode });
+        socket.emit(SocketEvents.ANTI_CHEAT_EVENT, {
+          roomCode,
+          type: "tab_switch",
+        });
       }
     };
 
@@ -90,8 +125,9 @@ export default function GameRoom({
   }, [monacoTheme]);
 
   useEffect(() => {
-    socket.emit("rejoin-room", roomCode);
-    socket.emit("get-problem", roomCode);
+    socket.emit(SocketEvents.REJOIN_ROOM, roomCode);
+    socket.emit(SocketEvents.GET_PROBLEM, roomCode);
+    socket.emit(SocketEvents.GET_ANTI_CHEAT_SUMMARY, roomCode);
   }, [roomCode]);
 
   useEffect(() => {
@@ -99,31 +135,77 @@ export default function GameRoom({
       setProblem(problemData);
     };
 
-    socket.on("problem", handleProblem);
+    const handleRoomReady = ({
+      problem: roomProblem,
+      mode,
+    }: {
+      problem?: Problem;
+      mode?: RoomMode;
+    }) => {
+      if (roomProblem) setProblem(roomProblem);
+      if (mode) setRoomMode(mode);
+    };
+
+    const handleConnect = () => setConnected(true);
+    const handleDisconnect = () => setConnected(false);
+
+    queueMicrotask(() => {
+      setConnected(socket.connected);
+    });
+
+    socket.on(SocketEvents.PROBLEM, handleProblem);
+    socket.on(SocketEvents.ROOM_READY, handleRoomReady);
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
     return () => {
-      socket.off("problem", handleProblem);
+      socket.off(SocketEvents.PROBLEM, handleProblem);
+      socket.off(SocketEvents.ROOM_READY, handleRoomReady);
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
     };
   }, []);
 
   useEffect(() => {
-    const handleCheatWarning = ({ count }: { count: number }) => {
-      setWarning(count);
+    const handleCheatWarning = (event: AntiCheatWarning) => {
+      const stats = normalizeAntiCheatStats(event.stats);
+      const totalWarnings =
+        stats.tabSwitches +
+        stats.suspiciousPastes +
+        stats.submissionSpamAttempts;
+
+      setWarning(totalWarnings);
+      setAntiCheatStats((currentStats) => ({
+        ...currentStats,
+        [event.playerId]: stats,
+      }));
     };
 
-    socket.on("cheat-warning", handleCheatWarning);
+    const handleAntiCheatSummary = (
+      summary: AntiCheatSummary | Record<string, AntiCheatStats>,
+    ) => {
+      setAntiCheatStats(normalizeAntiCheatSummary(summary));
+    };
+
+    socket.on(SocketEvents.ANTI_CHEAT_WARNING, handleCheatWarning);
+    socket.on(SocketEvents.ANTI_CHEAT_SUMMARY, handleAntiCheatSummary);
     return () => {
-      socket.off("cheat-warning", handleCheatWarning);
+      socket.off(SocketEvents.ANTI_CHEAT_WARNING, handleCheatWarning);
+      socket.off(SocketEvents.ANTI_CHEAT_SUMMARY, handleAntiCheatSummary);
     };
   }, []);
 
   useEffect(() => {
-    const handleCodeUpdate = (nextCode: string) => {
-      setOpponentCode(nextCode);
+    const handleCodeUpdate = (
+      payload: string | { code?: string; language?: Language },
+    ) => {
+      setOpponentCode(
+        typeof payload === "string" ? payload : payload.code || "",
+      );
     };
 
-    socket.on("code-update", handleCodeUpdate);
+    socket.on(SocketEvents.CODE_UPDATE, handleCodeUpdate);
     return () => {
-      socket.off("code-update", handleCodeUpdate);
+      socket.off(SocketEvents.CODE_UPDATE, handleCodeUpdate);
     };
   }, []);
 
@@ -142,9 +224,9 @@ export default function GameRoom({
       );
     };
 
-    socket.on("submission-result", handleSubmissionResult);
+    socket.on(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
     return () => {
-      socket.off("submission-result", handleSubmissionResult);
+      socket.off(SocketEvents.SUBMISSION_RESULT, handleSubmissionResult);
     };
   }, []);
 
@@ -155,9 +237,9 @@ export default function GameRoom({
       setLeaderboard(scores);
     };
 
-    socket.on("leaderboard-update", handleLeaderboardUpdate);
+    socket.on(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
     return () => {
-      socket.off("leaderboard-update", handleLeaderboardUpdate);
+      socket.off(SocketEvents.LEADERBOARD_UPDATE, handleLeaderboardUpdate);
     };
   }, []);
 
@@ -168,89 +250,52 @@ export default function GameRoom({
     return a[1].submittedAt - b[1].submittedAt;
   });
 
-  const analytics = useMemo(() => {
-    const characterCount = result?.characterCount ?? code.length;
-    const bestScore = sortedLeaderboard[0]?.[1].score;
-    const scoreVsPar = par - characterCount;
-    const compressionScore =
-      characterCount === 0
-        ? 0
-        : Math.max(0, Math.min(100, Math.round((1 - characterCount / par) * 100)));
-    const percentile =
-      bestScore && characterCount > 0
-        ? Math.max(1, Math.min(99, Math.round((bestScore / characterCount) * 100)))
-        : result?.success
-          ? 82
-          : 0;
-
-    return {
-      characterCount,
-      compressionScore,
-      percentile,
-      scoreVsPar,
-      runtime: result ? (result.success ? "42ms" : "fail") : "--",
-      memory: result ? (result.success ? "18mb" : "--") : "--",
-    };
-  }, [code.length, par, result, sortedLeaderboard]);
-
-  const languageStats = useMemo(() => {
-    const stats = sortedLeaderboard.reduce<Record<string, number>>(
-      (acc, [, entry]) => {
-        acc[entry.language] = (acc[entry.language] || 0) + 1;
-        return acc;
-      },
-      {},
-    );
-
-    if (!Object.keys(stats).length) {
-      stats[language] = 1;
-    }
-
-    return Object.entries(stats);
-  }, [language, sortedLeaderboard]);
-
-  const reductionSuggestions = [
-    "Inline once-used names.",
-    "Fold parsing into the return expression.",
-    "Try a built-in before writing the loop.",
-  ];
+  const characterCount = result?.characterCount ?? code.length;
+  const scoreVsPar = par - characterCount;
+  const warningTotals = Object.values(antiCheatStats).reduce(
+    (total, stats) =>
+      total +
+      stats.tabSwitches +
+      stats.suspiciousPastes +
+      stats.submissionSpamAttempts,
+    0,
+  );
 
   return (
     <PremiumShell
       compact
-      navItems={[
-        { label: "Home", href: "/", marker: "00" },
-        { label: "Problems", marker: "01", active: true },
-        { label: "Leaderboard", marker: "02" },
-        { label: "Analytics", marker: "03" },
-      ]}
+      status={
+        <>
+          <div className="status-orbit">
+            <span className={connected ? "" : "offline"} />
+          </div>
+          <div>
+            <strong>Room {roomCode}</strong>
+            <span>{connected ? "connected" : "reconnecting"}</span>
+          </div>
+        </>
+      }
       topbar={
         <TopNav
           eyebrow={`room ${roomCode} / par ${par}b`}
           title={problem?.title || "Problem card"}
           actions={
             <>
-              <span className="status-pill live">
+              <span className={connected ? "status-pill live" : "status-pill"}>
                 <span className="status-dot" />
-                socket: live
+                {connected ? "socket connected" : "socket reconnecting"}
               </span>
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => setLanguage(e.target.value as Language)}
                 className="select compact-select"
                 aria-label="Language"
               >
                 <option value="python">Python</option>
                 <option value="javascript">JavaScript</option>
+                <option value="cpp">C++</option>
+                <option value="java">Java</option>
               </select>
-              <button
-                className="button"
-                onClick={() =>
-                  setTheme((prev) => (prev === "light" ? "dark" : "light"))
-                }
-              >
-                {theme === "light" ? "dark editor" : "light editor"}
-              </button>
             </>
           }
         />
@@ -258,18 +303,23 @@ export default function GameRoom({
     >
       {warning > 0 && (
         <div className="warning-banner">
-          <span className="log-prefix">!</span>
-          tab switch recorded ({warning})
+              <span className="log-prefix">!</span>
+          integrity event recorded ({warning})
         </div>
       )}
 
-      <section className="problem-workspace">
+      <section
+        className={
+          roomMode === "solo" ? "problem-workspace solo-workspace" : "problem-workspace"
+        }
+      >
         <aside className="problem-panel">
           <SurfaceCard className="statement-card">
             {problem ? (
               <>
                 <div className="problem-card-top">
-                  <span className="ledger-marker">::{problem.difficulty}</span>
+                  <span className="ledger-marker">::{problem.topic}</span>
+                  <span className="badge">{problem.difficulty}</span>
                 </div>
                 <h2>{problem.title}</h2>
                 <p>{problem.description}</p>
@@ -286,8 +336,8 @@ export default function GameRoom({
           <SurfaceCard className="test-card">
             <div className="section-heading compact-heading">
               <div>
-                <div className="eyebrow">Test result</div>
-                <h2>Last stroke</h2>
+                <div className="eyebrow">judge result</div>
+                <h2>Last submit</h2>
               </div>
               <span className="section-stamp">stdout</span>
             </div>
@@ -312,16 +362,19 @@ export default function GameRoom({
               <h2>Your card</h2>
             </div>
             <div className="toolbar">
-              <span className="badge">{analytics.characterCount}b</span>
+              <span className="badge">{characterCount}b</span>
               <button
                 className="button button-primary"
                 onClick={() =>
-                  socket.emit("submit-code", { roomCode, code, language })
+                  socket.emit(SocketEvents.SUBMIT_CODE, { roomCode, code, language })
                 }
               >
                 submit
               </button>
-              <button className="button" onClick={() => router.push(`/replay/${roomCode}`)}>
+              <button
+                className="button"
+                onClick={() => router.push(`/replay/${roomCode}`)}
+              >
                 replay
               </button>
             </div>
@@ -352,88 +405,86 @@ export default function GameRoom({
                   const newCode = value || "";
                   setCode(newCode);
 
-                  socket.emit("code-update", {
+                  socket.emit(SocketEvents.CODE_UPDATE, {
                     roomCode,
                     code: newCode,
+                    language,
                   });
                 }}
               />
             </div>
 
-            <div className="editor-pane premium-editor-pane opponent-pane">
-              <div className="editor-title">
-                <strong>opponent</strong>
-                <span className="badge">readonly</span>
+            {roomMode === "multiplayer" && (
+              <div className="editor-pane premium-editor-pane opponent-pane">
+                <div className="editor-title">
+                  <strong>opponent</strong>
+                  <span className="badge">readonly</span>
+                </div>
+                <Editor
+                  height="100%"
+                  language={language}
+                  value={opponentCode}
+                  theme={monacoTheme}
+                  options={{
+                    readOnly: true,
+                    minimap: { enabled: false },
+                    fontFamily: "JetBrains Mono, monospace",
+                    fontSize: 13,
+                    padding: { top: 18, bottom: 18 },
+                    wordWrap: "on",
+                  }}
+                />
               </div>
-              <Editor
-                height="100%"
-                language={language}
-                value={opponentCode}
-                theme={monacoTheme}
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  fontFamily: "JetBrains Mono, monospace",
-                  fontSize: 13,
-                  padding: { top: 18, bottom: 18 },
-                  wordWrap: "on",
-                }}
-              />
-            </div>
+            )}
           </div>
         </section>
 
-        <aside className="analytics-panel">
-          <section className="scorecard-grid analytics-grid">
-            <StatCard label="characters" value={`${analytics.characterCount}b`} detail={`par ${par}b`} />
-            <StatCard
-              label="under / over"
-              value={analytics.scoreVsPar >= 0 ? `-${analytics.scoreVsPar}b` : `+${Math.abs(analytics.scoreVsPar)}b`}
-              detail="against par"
-              tone={analytics.scoreVsPar >= 0 ? "green" : "purple"}
-            />
-            <StatCard label="runtime" value={analytics.runtime} detail="judge" tone="amber" />
-            <StatCard label="memory" value={analytics.memory} detail="judge" tone="purple" />
-          </section>
-
-          <SurfaceCard className="signature-analytics">
+        <aside className="room-panel-stack">
+          <SurfaceCard className="round-card">
             <div className="section-heading compact-heading">
               <div>
-                <div className="eyebrow">Submission analytics</div>
-                <h2>Byte ledger</h2>
+                <div className="eyebrow">current attempt</div>
+                <h2>Score</h2>
               </div>
-              <span className="section-stamp">{analytics.percentile || "--"} pct</span>
+              <span className="section-stamp">{roomMode}</span>
             </div>
 
-            <div className="percentile-ring">
+            <div className="score-lines">
               <div>
-                <strong>{analytics.compressionScore}%</strong>
-                <span>cut score</span>
+                <span>bytes</span>
+                <strong>{characterCount}b</strong>
+              </div>
+              <div>
+                <span>par</span>
+                <strong>{par}b</strong>
+              </div>
+              <div>
+                <span>delta</span>
+                <strong
+                  className={scoreVsPar >= 0 ? "score-good" : "score-over"}
+                >
+                  {scoreVsPar >= 0 ? `-${scoreVsPar}b` : `+${Math.abs(scoreVsPar)}b`}
+                </strong>
               </div>
             </div>
 
-            <div className="mini-chart submission-history" aria-label="Submission history">
-              {(submissionHistory.length
-                ? submissionHistory
-                : [{ at: 0, characterCount: code.length || par, success: false }]
-              ).map((entry, index) => (
-                <span
-                  key={`${entry.at}-${index}`}
-                  className={entry.success ? "history-ok" : "history-fail"}
-                  style={{
-                    height: `${Math.max(12, Math.min(100, (entry.characterCount / par) * 100))}%`,
-                  }}
+            <div className="submission-list">
+              {submissionHistory.length ? (
+                submissionHistory.map((entry) => (
+                  <div className="submission-row" key={entry.at}>
+                    <span>{new Date(entry.at).toLocaleTimeString()}</span>
+                    <strong>{entry.characterCount}b</strong>
+                    <em className={entry.success ? "score-good" : "score-over"}>
+                      {entry.success ? "accepted" : "rejected"}
+                    </em>
+                  </div>
+                ))
+              ) : (
+                <EmptyState
+                  title="No submissions"
+                  description="Submit code to record attempts for this room."
                 />
-              ))}
-            </div>
-
-            <div className="suggestion-list">
-              {reductionSuggestions.map((suggestion) => (
-                <div className="suggestion-item" key={suggestion}>
-                  <span className="log-prefix">-</span>
-                  <span>{suggestion}</span>
-                </div>
-              ))}
+              )}
             </div>
           </SurfaceCard>
 
@@ -464,23 +515,36 @@ export default function GameRoom({
             </div>
           </SurfaceCard>
 
-          <SurfaceCard className="language-card">
+          <SurfaceCard className="integrity-card">
             <div className="section-heading compact-heading">
               <div>
-                <div className="eyebrow">Language stats</div>
-                <h2>Room mix</h2>
+                <div className="eyebrow">anti-cheat</div>
+                <h2>Integrity</h2>
               </div>
-              <span className="section-stamp">langs</span>
+              <span className="section-stamp">{warningTotals}</span>
             </div>
-            {languageStats.map(([name, count]) => (
-              <div className="language-row" key={name}>
-                <span>{name}</span>
-                <div>
-                  <i style={{ width: `${Math.min(100, count * 42)}%` }} />
+            {Object.keys(antiCheatStats).length ? (
+              Object.entries(antiCheatStats).map(([playerId, stats], index) => (
+                <div className="integrity-row" key={playerId}>
+                  <strong>player {index + 1}</strong>
+                  <span>{playerId.slice(0, 8)}</span>
+                  <em>
+                    tabs {stats.tabSwitches ?? emptyAntiCheatStats.tabSwitches} /
+                    pastes{" "}
+                    {stats.suspiciousPastes ??
+                      emptyAntiCheatStats.suspiciousPastes}{" "}
+                    / cooldown{" "}
+                    {stats.submissionSpamAttempts ??
+                      emptyAntiCheatStats.submissionSpamAttempts}
+                  </em>
                 </div>
-                <strong>{count}</strong>
-              </div>
-            ))}
+              ))
+            ) : (
+              <EmptyState
+                title="No events"
+                description="Integrity events from this room appear here."
+              />
+            )}
           </SurfaceCard>
         </aside>
       </section>

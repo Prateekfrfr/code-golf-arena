@@ -56,6 +56,16 @@ export interface AntiCheatWarning {
   metadata?: Record<string, unknown>;
 }
 
+export interface AntiCheatSummary {
+  stats: Record<string, AntiCheatStats>;
+  events: Array<{
+    playerId: string;
+    type: AntiCheatWarning["type"];
+    metadata?: Record<string, unknown>;
+    timestamp: number;
+  }>;
+}
+
 export interface ReplayPayload {
   replay: Record<string, ReplayEntry[]>;
   players: string[];

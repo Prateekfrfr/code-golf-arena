@@ -11,10 +11,7 @@ type NavItem = {
 };
 
 const defaultNavItems: NavItem[] = [
-  { label: "Home", href: "/", active: true, marker: "00" },
-  { label: "Problems", marker: "01" },
-  { label: "Leaderboard", marker: "02" },
-  { label: "Analytics", marker: "03" },
+  { label: "Home", href: "/", active: true, marker: "cd" },
 ];
 
 export function PremiumShell({
@@ -22,11 +19,13 @@ export function PremiumShell({
   navItems = defaultNavItems,
   topbar,
   compact = false,
+  status,
 }: {
   children: ReactNode;
   navItems?: NavItem[];
   topbar?: ReactNode;
   compact?: boolean;
+  status?: ReactNode;
 }) {
   return (
     <main className={compact ? "premium-shell premium-shell-compact" : "premium-shell"}>
@@ -37,12 +36,6 @@ export function PremiumShell({
             <strong>Code Golf</strong>
             <small>Arena</small>
           </span>
-        </Link>
-
-        <div className="sidebar-section-label">Developer arena</div>
-        <Link className="sidebar-link dashboard-link active" href="/">
-          <span className="nav-marker">D0</span>
-          <span>Dashboard</span>
         </Link>
 
         <nav className="sidebar-nav" aria-label="Primary navigation">
@@ -78,13 +71,7 @@ export function PremiumShell({
         </nav>
 
         <div className="sidebar-status">
-          <div className="status-orbit">
-            <span />
-          </div>
-          <div>
-            <strong>Realtime arena</strong>
-            <span>socket: live</span>
-          </div>
+          {status}
         </div>
       </aside>
 
@@ -124,27 +111,6 @@ export function SurfaceCard({
   className?: string;
 }) {
   return <section className={`surface-card ${className}`}>{children}</section>;
-}
-
-export function StatCard({
-  label,
-  value,
-  detail,
-  tone = "blue",
-}: {
-  label: string;
-  value: ReactNode;
-  detail?: ReactNode;
-  tone?: "blue" | "purple" | "green" | "amber";
-}) {
-  return (
-    <SurfaceCard className={`stat-card stat-card-${tone}`}>
-      <div className="stat-rule" />
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {detail && <small>{detail}</small>}
-    </SurfaceCard>
-  );
 }
 
 export function EmptyState({

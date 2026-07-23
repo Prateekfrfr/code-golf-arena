@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Add Two Integers",
+    "slug": "add-two-integers",
+    "statement": "Read two integers and print their sum.",
+    "difficulty": "easy",
+    "visibleTests": [
+      {
+        "input": "2 3",
+        "expectedOutput": "5"
+      }
+    ]
+  },
+  {
+    "title": "Add Two Integers",
+    "slug": "sum-two-integers",
+    "statement": "Read two integers and print their sum.",
+    "difficulty": "easy",
+    "visibleTests": [
+      {
+        "input": "2 3",
+        "expectedOutput": "5"
+      }
+    ]
+  }
+]

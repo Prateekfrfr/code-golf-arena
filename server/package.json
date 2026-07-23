@@ -1,12 +1,16 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Socket and sandbox execution service for Code Golf Arena",
   "main": "index.js",
-  "type": "module" ,
+  "type": "module",
+  "engines": {
+    "node": ">=20.9 <25"
+  },
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check executor.js"
+    "test": "node --test \"{test,tests}/**/*.test.js\"",
+    "check": "node --check index.js && node --check executor.js && node --check judge.js && npm test"
   },
   "keywords": [],
   "author": "",

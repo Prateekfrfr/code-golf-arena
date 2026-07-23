@@ -7,6 +7,7 @@ export const SocketEvents = {
   REJOIN_ROOM: 'rejoin-room',
   ROOM_READY: 'room-ready',
   ROOM_ERROR: 'room-error',
+  SESSION_READY: 'session-ready',
   GET_PROBLEM: 'get-problem',
   PROBLEM: 'problem',
   CODE_UPDATE: 'code-update',
@@ -22,8 +23,14 @@ export const SocketEvents = {
 };
 
 export const AntiCheatEventTypes = {
+  FOCUS_LOST: 'focus_lost',
+  FOCUS_GAINED: 'focus_gained',
+  FOCUS_CHECK: 'focus_check',
   TAB_SWITCH: 'tab_switch',
+  PASTE: 'paste',
   LARGE_PASTE: 'large_paste',
+  DROP_INSERT: 'drop_insert',
+  SUBMISSION_ATTEMPT: 'submission_attempt',
   SUBMISSION_SPAM: 'submission_spam'
 };
 

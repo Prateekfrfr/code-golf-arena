@@ -1,0 +1,11 @@
+{
+  "slug": "missing-title",
+  "statement": "This fixture intentionally has no title.",
+  "difficulty": "easy",
+  "visibleTests": [
+    {
+      "input": "",
+      "expectedOutput": ""
+    }
+  ]
+}

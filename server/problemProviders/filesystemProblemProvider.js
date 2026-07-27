@@ -62,34 +62,49 @@ const collectJsonFiles = async (root, limits) => {
   return files;
 };
 
+/**
+ * Reads bounded JSON records from a trusted local directory. Callers still
+ * must normalize and validate every returned record at their own boundary.
+ */
+export const readFilesystemProblemRecords = async ({
+  rootDir,
+  limits: limitOverrides = {}
+}) => {
+  if (!rootDir) throw new TypeError('rootDir is required');
+  const root = path.resolve(rootDir);
+  const limits = { ...DEFAULT_LIMITS, ...limitOverrides };
+  const rootStats = await fs.lstat(root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error('rootDir must be a real directory');
+  }
+  const files = await collectJsonFiles(root, limits);
+  const records = [];
+  for (const file of files) {
+    const text = await fs.readFile(file, 'utf8');
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`Invalid JSON in ${file}: ${error.message}`);
+    }
+    if (Array.isArray(parsed)) records.push(...parsed);
+    else records.push(parsed);
+  }
+  return records;
+};
+
 export const createFilesystemProblemProvider = ({
   rootDir,
   limits: limitOverrides = {},
   random = Math.random
 }) => {
-  if (!rootDir) throw new TypeError('rootDir is required');
-  const root = path.resolve(rootDir);
-  const limits = { ...DEFAULT_LIMITS, ...limitOverrides };
   let catalog = null;
 
   const load = async () => {
-    const rootStats = await fs.lstat(root);
-    if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-      throw new Error('rootDir must be a real directory');
-    }
-    const files = await collectJsonFiles(root, limits);
-    const records = [];
-    for (const file of files) {
-      const text = await fs.readFile(file, 'utf8');
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch (error) {
-        throw new Error(`Invalid JSON in ${file}: ${error.message}`);
-      }
-      if (Array.isArray(parsed)) records.push(...parsed);
-      else records.push(parsed);
-    }
+    const records = await readFilesystemProblemRecords({
+      rootDir,
+      limits: limitOverrides
+    });
     catalog = createProblemCatalog(records);
     return { count: catalog.size, changed: true };
   };

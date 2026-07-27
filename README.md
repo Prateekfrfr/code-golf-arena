@@ -44,6 +44,7 @@ server/problemProviders/     Local, filesystem, GitHub, and DB adapters
 server/problemImport/        Validation, dedupe, versioning, and sync planning
 server/problems/             Canonical schema, catalog, public projections
 server/repositories/         Current in-memory room/replay/score/submission state
+server/db/                   PostgreSQL pool, repositories, and reversible migrations
 shared/events.*              Shared event names
 types/domain.ts              Frontend domain contracts
 ```
@@ -82,6 +83,65 @@ Open `http://localhost:3000`. The backend listens on
 The executor downloads configured language images on first use. Production
 deployments should replace image tags in `.env.example` with reviewed immutable
 digests and run the executor on a dedicated worker host.
+
+## PostgreSQL persistence
+
+The server defaults to `PERSISTENCE_MODE=memory`, preserving the fast local
+and test setup. Set `PERSISTENCE_MODE=postgres` and configure `DATABASE_URL`
+to make the existing problem-provider and submission-repository seams use
+PostgreSQL. Migrations are explicit and are never run during server boot:
+
+```bash
+npm run db:migrate
+npm run db:seed
+```
+
+`db:seed` imports the bundled development catalog and, when configured,
+bounded JSON files from `PROBLEM_SEED_FILESYSTEM_DIR`. It refuses to run until
+the `PROBLEM_SEED_SOURCE_*` values identify an approved license, attribution,
+and immutable source revision. Do not invent this provenance; set it to the
+actual redistribution terms for the data being seeded.
+
+To exercise reversible migrations against an empty disposable database:
+
+```bash
+npm run db:migrate:verify
+```
+
+The migration check applies all migrations, rolls them back, then applies them
+again. It is intentionally an operator/CI integration check because it needs a
+real `DATABASE_URL`.
+
+## Alfa metadata ingestion
+
+Alfa is an optional, self-hosted upstream adapter. It is disabled until both
+`ALFA_API_URL` and `PROBLEM_SYNC_ENABLED=true` are configured. Its cache lives
+in PostgreSQL and the admin sync routes require an authenticated administrator.
+
+Every Alfa record is stored as `RESTRICTED_METADATA_ONLY`: public responses
+contain attribution and the canonical LeetCode link, never a statement, HTML,
+tests, or a judge bundle. `ALFA_STORE_FULL_CONTENT=false` is the safe default;
+setting it to `true` is documented for local development only and does not make
+the record public or judgeable.
+
+## Accounts and durable progress
+
+With `PERSISTENCE_MODE=postgres`, the backend provides registration, login,
+logout, and profile endpoints under `/api/auth`. Passwords use salted `scrypt`;
+the browser receives only an opaque, HttpOnly session cookie whose SHA-256
+digest is stored in PostgreSQL. Cookies are `Secure` in production and use
+`SameSite=Lax`; state-changing API requests reject cross-site origins.
+
+Registration may include the browser's existing stable guest ID, transferring
+that guest's durable submissions in one transaction. Existing browser sockets
+then adopt the registered identity on reconnect. Persistent leaderboards are
+available under `/api/leaderboards/{global,problems/:slug,languages/:language,me}`;
+authenticated progress is at `/api/progress`, and `solved=solved|unsolved`
+extends the existing `/api/problems` filters for an authenticated account.
+
+Set `AUTH_BOOTSTRAP_ADMIN_EMAIL` only during initial setup if the first
+matching registered account should administer problem sync. Clear it after the
+administrator has registered. See [account security and setup](docs/AUTHENTICATION.md).
 
 ## Scoring
 
@@ -129,18 +189,34 @@ npm run build
 
 `npm run check` runs the full sequence.
 
-## Production persistence path
+## Persistence roadmap
 
-Room, replay, score, and submission repositories are currently bounded
-in-memory adapters for local demos. A production deployment should use:
+Problems, immutable problem versions, guest users, submissions, stored score
+breakdowns, and analytics have PostgreSQL repositories today. Room, replay,
+live score, and rate-limit state remain bounded in-memory adapters until the
+Redis lifecycle phase. A production deployment should next use:
 
 - Redis for room membership, TTLs, live scores, anti-cheat session state,
   replay streams, rate limits, and the Socket.IO adapter
-- PostgreSQL for users, problem versions, test cases, immutable submissions,
-  score configurations, source sync runs, and durable analytics
+- PostgreSQL for score configurations and source sync runs in addition to the
+  durable entities above
 - a dedicated execution worker/queue separated from the public Socket.IO
   process
 - authenticated user sessions in place of the current random guest identity
 
-The current repository interfaces and immutable submission/score payloads are
-designed for that migration.
+The room lifecycle repository already has an asynchronous contract for create,
+lookup, membership, connection, cleanup, and deletion. Its current in-memory
+implementation preserves existing behavior; Redis will be a second
+implementation rather than a new lifecycle path.
+
+## Redis realtime state
+
+Set `EPHEMERAL_STATE_MODE=redis` with a private `REDIS_URL` to share room
+state, Socket.IO broadcasts, replay buffers, live scores, anti-cheat state,
+and rate-limit counters across application instances. Redis keys are prefixed
+with `REDIS_KEY_PREFIX` and use bounded TTLs; PostgreSQL remains authoritative
+for durable problems, submissions, scores, and analytics. If Redis is
+unavailable at startup, Redis mode refuses to boot rather than silently
+splitting a live match across process-local state. In-memory mode remains the
+default for development and tests. See [the Redis state and recovery
+model](docs/REDIS_STATE.md) before using Redis in production.

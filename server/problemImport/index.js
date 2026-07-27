@@ -7,7 +7,8 @@ export {
 } from './fingerprint.js';
 export {
   createLicensePolicy,
-  DEFAULT_ALLOWED_LICENSES
+  DEFAULT_ALLOWED_LICENSES,
+  RESTRICTED_METADATA_ONLY
 } from './licensePolicy.js';
 export { createProblemSync } from './problemSync.js';
 export {

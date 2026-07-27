@@ -2,6 +2,7 @@ import Docker from 'dockerode';
 import { PassThrough } from 'stream';
 import { performance } from 'node:perf_hooks';
 import { serverConfig } from './config.js';
+import { logger } from './observability/logger.js';
 
 const dockerClient = new Docker({
   socketPath: '//./pipe/docker_engine'
@@ -192,7 +193,7 @@ export const runCode = async (
       outputTruncated: state.outputTruncated
     });
   } catch (err) {
-    console.error('Error running code in Docker container:', err);
+    logger.error('executor.run.failed', { error: err, language });
     return createExecutionResult({
       stdout: state.stdout.trim(),
       stderr: state.stderr.trim(),

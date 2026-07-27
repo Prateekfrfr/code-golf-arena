@@ -1,3 +1,11 @@
+/** @typedef {{ min: number, max: number }} IntegerBounds */
+/** @typedef {{ max?: number, pattern?: RegExp }} StringOptions */
+
+/**
+ * @param {string} name
+ * @param {number} fallback
+ * @param {IntegerBounds} bounds
+ */
 const readInteger = (name, fallback, { min, max }) => {
   const raw = process.env[name];
   if (raw == null || raw === '') return fallback;
@@ -12,6 +20,51 @@ const readInteger = (name, fallback, { min, max }) => {
   return value;
 };
 
+/**
+ * @param {string} name
+ * @param {string} [fallback]
+ * @param {StringOptions} [options]
+ */
+const readString = (name, fallback = '', { max = 2_000, pattern } = {}) => {
+  const value = String(process.env[name] ?? fallback).trim();
+  if (value.length > max || (pattern && value && !pattern.test(value))) {
+    throw new Error(`${name} is invalid.`);
+  }
+  return value;
+};
+
+const persistenceMode = readString('PERSISTENCE_MODE', 'memory', {
+  max: 20,
+  pattern: /^(memory|postgres)$/
+});
+const ephemeralStateMode = readString('EPHEMERAL_STATE_MODE', 'memory', {
+  max: 20,
+  pattern: /^(memory|redis)$/
+});
+const databaseUrl = readString('DATABASE_URL', '', { max: 4_000 });
+const redisUrl = readString('REDIS_URL', '', { max: 4_000 });
+if (persistenceMode === 'postgres' && !databaseUrl) {
+  throw new Error('DATABASE_URL is required when PERSISTENCE_MODE is postgres.');
+}
+if (ephemeralStateMode === 'redis' && !redisUrl) {
+  throw new Error('REDIS_URL is required when EPHEMERAL_STATE_MODE is redis.');
+}
+
+/** @param {string} name @param {boolean} fallback */
+const readBoolean = (name, fallback) => {
+  const raw = String(process.env[name] ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`${name} must be true or false.`);
+};
+
+const alfaStoreFullContent = readBoolean('ALFA_STORE_FULL_CONTENT', false);
+if (process.env.NODE_ENV === 'production' && alfaStoreFullContent) {
+  throw new Error('ALFA_STORE_FULL_CONTENT is allowed only for local development.');
+}
+
+/** @returns {string[]} */
 const readOrigins = () => {
   const configured = String(process.env.CORS_ORIGINS || '')
     .split(',')
@@ -52,8 +105,78 @@ export const serverConfig = Object.freeze({
   outputLimitBytes: readInteger('EXECUTION_OUTPUT_LIMIT_BYTES', 64 * 1024, {
     min: 1024,
     max: 1024 * 1024
+  }),
+  alfa: Object.freeze({
+    apiUrl: readString('ALFA_API_URL', '', { max: 2_000 }),
+    timeoutMs: readInteger('ALFA_API_TIMEOUT_MS', 5_000, {
+      min: 500,
+      max: 60_000
+    }),
+    cacheTtlDays: readInteger('ALFA_CACHE_TTL_DAYS', 7, { min: 1, max: 365 }),
+    cacheVersion: readString('ALFA_CACHE_VERSION', '1', { max: 80 }),
+    storeFullContent: alfaStoreFullContent,
+    syncEnabled: readBoolean('PROBLEM_SYNC_ENABLED', false),
+    batchSize: readInteger('PROBLEM_SYNC_BATCH_SIZE', 25, { min: 1, max: 100 }),
+    syncConcurrency: readInteger('PROBLEM_SYNC_CONCURRENCY', 3, {
+      min: 1,
+      max: 10
+    }),
+    maxRetries: readInteger('PROBLEM_SYNC_MAX_RETRIES', 3, { min: 0, max: 8 })
+  }),
+  persistenceMode,
+  ephemeralStateMode,
+  redis: Object.freeze({
+    url: redisUrl,
+    keyPrefix: readString('REDIS_KEY_PREFIX', 'code-golf-arena', {
+      max: 80,
+      pattern: /^[a-zA-Z0-9:_-]+$/
+    }),
+    roomTtlMs: readInteger('REDIS_ROOM_TTL_MS', 4 * 60 * 60 * 1000, {
+      min: 60_000,
+      max: 24 * 60 * 60 * 1000
+    }),
+    reconnectMaxDelayMs: readInteger('REDIS_RECONNECT_MAX_DELAY_MS', 10_000, {
+      min: 1_000,
+      max: 60_000
+    })
+  }),
+  auth: Object.freeze({
+    sessionCookieName: readString('AUTH_SESSION_COOKIE_NAME', 'cga_session', {
+      max: 80,
+      pattern: /^[a-zA-Z0-9_-]+$/
+    }),
+    sessionTtlMs: readInteger('AUTH_SESSION_TTL_MS', 7 * 24 * 60 * 60 * 1_000, {
+      min: 60 * 60 * 1_000,
+      max: 90 * 24 * 60 * 60 * 1_000
+    }),
+    bootstrapAdminEmail: readString('AUTH_BOOTSTRAP_ADMIN_EMAIL', '', {
+      max: 320
+    }).toLowerCase()
+  }),
+  database: Object.freeze({
+    url: databaseUrl,
+    poolMax: readInteger('DATABASE_POOL_MAX', 10, { min: 1, max: 100 }),
+    idleTimeoutMs: readInteger('DATABASE_IDLE_TIMEOUT_MS', 30_000, {
+      min: 1_000,
+      max: 300_000
+    }),
+    connectionTimeoutMs: readInteger('DATABASE_CONNECTION_TIMEOUT_MS', 5_000, {
+      min: 1_000,
+      max: 60_000
+    }),
+    seedFilesystemDir: readString('PROBLEM_SEED_FILESYSTEM_DIR', '', {
+      max: 500
+    }),
+    seedSource: Object.freeze({
+      revision: readString('PROBLEM_SEED_SOURCE_REVISION', '', { max: 200 }),
+      spdxId: readString('PROBLEM_SEED_SOURCE_LICENSE', '', { max: 80 }),
+      attribution: readString('PROBLEM_SEED_SOURCE_ATTRIBUTION', '', {
+        max: 1_000
+      })
+    })
   })
 });
 
+/** @param {string | undefined | null} origin */
 export const isAllowedOrigin = (origin) =>
   !origin || serverConfig.corsOrigins.includes(origin);

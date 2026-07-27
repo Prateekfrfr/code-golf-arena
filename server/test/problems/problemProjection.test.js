@@ -36,3 +36,50 @@ test('judge projection includes hidden tests only in its compatibility testCases
   assert.equal(judgeProblem.testCases.length, 2);
   assert.equal(judgeProblem.testCases[1].input, 'secret');
 });
+
+test('restricted metadata-only provenance only exposes attribution and canonical URL', () => {
+  const restricted = {
+    title: 'Restricted Problem',
+    statement: '<article>Copyrighted statement</article>',
+    difficulty: 'hard',
+    visibleTests: [{ input: 'sample', expectedOutput: 'sample output' }],
+    metadata: {
+      public: {
+        content: '<script>never expose this</script>',
+        html: '<p>never expose this either</p>'
+      },
+      content: 'stored content is never public for a restricted record'
+    },
+    provenance: {
+      state: 'RESTRICTED_METADATA_ONLY',
+      attribution: 'LeetCode',
+      canonicalUrl: 'https://leetcode.com/problems/restricted-problem/'
+    }
+  };
+
+  const publicProblem = toPublicProblem(restricted);
+  const serialized = JSON.stringify(publicProblem);
+  assert.equal(publicProblem.provenance.state, 'RESTRICTED_METADATA_ONLY');
+  assert.equal(publicProblem.attribution, 'LeetCode');
+  assert.equal(
+    publicProblem.canonicalUrl,
+    'https://leetcode.com/problems/restricted-problem/'
+  );
+  for (const forbidden of [
+    'statement',
+    'description',
+    'explanation',
+    'visibleTests',
+    'testCases',
+    'metadata',
+    'starterCode'
+  ]) {
+    assert.equal(Object.hasOwn(publicProblem, forbidden), false);
+  }
+  assert.equal(serialized.includes('Copyrighted statement'), false);
+  assert.equal(serialized.includes('never expose this'), false);
+  assert.throws(
+    () => toJudgeProblem(restricted),
+    (error) => error?.code === 'RESTRICTED_PROBLEM_NOT_JUDGEABLE'
+  );
+});

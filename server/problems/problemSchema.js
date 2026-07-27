@@ -1,3 +1,36 @@
+import { ValidationError } from '../errors/index.js';
+
+/** @typedef {string | number | boolean | null | undefined | JsonArray | JsonObject} JsonValue */
+/** @typedef {JsonValue[]} JsonArray */
+/** @typedef {{ [key: string]: JsonValue }} JsonObject */
+/** @typedef {{ input: JsonValue, expectedOutput: JsonValue, description?: string, metadata?: JsonValue }} NormalizedTest */
+/** @typedef {{ input: JsonValue, output: JsonValue, explanation?: string }} NormalizedExample */
+/** @typedef {'LICENSED' | 'RESTRICTED_METADATA_ONLY'} ProvenanceState */
+/** @typedef {{ state: ProvenanceState, attribution?: string, canonicalUrl?: string }} ProblemProvenance */
+/** @typedef {{
+ *   id?: string | number,
+ *   title: string,
+ *   slug: string,
+ *   statement: string,
+ *   description: string,
+ *   explanation: string,
+ *   examples: NormalizedExample[],
+ *   constraints: string[],
+ *   difficulty: string,
+ *   topic: string,
+ *   tags: string[],
+ *   starterCode: Record<string, string>,
+ *   supportedLanguages: string[],
+ *   visibleTests: NormalizedTest[],
+ *   hiddenTests: NormalizedTest[],
+ *   edgeCases: string[],
+ *   timeLimitMs: number,
+ *   memoryLimitMb: number,
+ *   metadata: JsonObject,
+ *   provenance: ProblemProvenance,
+ *   version: string
+ * }} NormalizedProblem */
+
 const DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LANGUAGE_PATTERN = /^[a-z][a-z0-9_+-]{0,31}$/;
@@ -49,24 +82,34 @@ const ALLOWED_KEYS = new Set([
   'memoryLimit',
   'memoryLimitMb',
   'metadata',
+  'provenance',
   'version'
 ]);
 
-export class ProblemValidationError extends Error {
+export const RESTRICTED_METADATA_ONLY = 'RESTRICTED_METADATA_ONLY';
+export const LICENSED_PROVENANCE = 'LICENSED';
+
+export class ProblemValidationError extends ValidationError {
+  /** @param {string | string[]} issues */
   constructor(issues) {
     const normalizedIssues = Array.isArray(issues) ? issues : [String(issues)];
-    super(`Invalid problem: ${normalizedIssues.join('; ')}`);
+    super(`Invalid problem: ${normalizedIssues.join('; ')}`, {
+      code: 'INVALID_PROBLEM',
+      details: { issues: normalizedIssues }
+    });
     this.name = 'ProblemValidationError';
     this.issues = normalizedIssues;
   }
 }
 
+/** @param {unknown} value @returns {value is Record<string, unknown>} */
 const isPlainObject = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 };
 
+/** @param {unknown} value @param {string} path @param {string[]} issues @returns {Record<string, unknown>} */
 const ensurePlainObject = (value, path, issues) => {
   if (!isPlainObject(value)) {
     issues.push(`${path} must be a plain object`);
@@ -75,6 +118,13 @@ const ensurePlainObject = (value, path, issues) => {
   return value;
 };
 
+/**
+ * @param {unknown} value
+ * @param {string} path
+ * @param {string[]} issues
+ * @param {{ required?: boolean, max?: number, defaultValue?: string }} [options]
+ * @returns {string}
+ */
 const boundedString = (
   value,
   path,
@@ -95,6 +145,13 @@ const boundedString = (
   return normalized;
 };
 
+/**
+ * @param {unknown} value
+ * @param {string} path
+ * @param {string[]} issues
+ * @param {{ min: number, max: number, defaultValue: number }} options
+ * @returns {number}
+ */
 const boundedInteger = (
   value,
   path,
@@ -102,13 +159,85 @@ const boundedInteger = (
   { min, max, defaultValue }
 ) => {
   const candidate = value == null ? defaultValue : value;
-  if (!Number.isSafeInteger(candidate) || candidate < min || candidate > max) {
+  if (
+    typeof candidate !== 'number' ||
+    !Number.isSafeInteger(candidate) ||
+    candidate < min ||
+    candidate > max
+  ) {
     issues.push(`${path} must be an integer between ${min} and ${max}`);
     return defaultValue;
   }
   return candidate;
 };
 
+/**
+ * Restricted records retain only rights-safe metadata for public use. The
+ * canonical URL is required so consumers can navigate to the source instead
+ * of receiving the copyrighted statement from this service.
+ * @param {unknown} value
+ * @param {string[]} issues
+ * @returns {ProblemProvenance}
+ */
+const normalizeProvenance = (value, issues) => {
+  if (value == null) return { state: LICENSED_PROVENANCE };
+  const source = ensurePlainObject(value, 'provenance', issues);
+  const unexpected = Object.keys(source).filter(
+    (key) => !['state', 'attribution', 'canonicalUrl'].includes(key)
+  );
+  if (unexpected.length) {
+    issues.push(`provenance has unknown keys: ${unexpected.join(', ')}`);
+  }
+  const state = boundedString(source.state, 'provenance.state', issues, {
+    required: true,
+    max: 64
+  }).toUpperCase();
+  if (state !== LICENSED_PROVENANCE && state !== RESTRICTED_METADATA_ONLY) {
+    issues.push('provenance.state must be LICENSED or RESTRICTED_METADATA_ONLY');
+  }
+  if (state !== RESTRICTED_METADATA_ONLY) {
+    return { state: LICENSED_PROVENANCE };
+  }
+
+  const attribution = boundedString(
+    source.attribution,
+    'provenance.attribution',
+    issues,
+    { required: true, max: 2_000 }
+  );
+  const canonicalUrl = boundedString(
+    source.canonicalUrl,
+    'provenance.canonicalUrl',
+    issues,
+    { required: true, max: 2_048 }
+  );
+  try {
+    const url = new URL(canonicalUrl);
+    if (url.protocol !== 'https:') {
+      issues.push('provenance.canonicalUrl must use https');
+    }
+  } catch {
+    issues.push('provenance.canonicalUrl must be a valid URL');
+  }
+  return {
+    state: RESTRICTED_METADATA_ONLY,
+    attribution,
+    canonicalUrl
+  };
+};
+
+/** @param {ProblemProvenance | undefined} provenance */
+export const isRestrictedMetadataOnly = (provenance) =>
+  provenance?.state === RESTRICTED_METADATA_ONLY;
+
+/**
+ * @param {unknown} value
+ * @param {string} path
+ * @param {string[]} issues
+ * @param {number} maxItems
+ * @param {number} [maxLength]
+ * @returns {string[]}
+ */
 const normalizeStringArray = (value, path, issues, maxItems, maxLength = 500) => {
   if (value == null) return [];
   if (!Array.isArray(value)) {
@@ -117,6 +246,7 @@ const normalizeStringArray = (value, path, issues, maxItems, maxLength = 500) =>
   }
   if (value.length > maxItems) issues.push(`${path} exceeds ${maxItems} items`);
 
+  /** @type {string[]} */
   const result = [];
   for (const [index, item] of value.slice(0, maxItems).entries()) {
     const normalized = boundedString(item, `${path}[${index}]`, issues, {
@@ -128,6 +258,12 @@ const normalizeStringArray = (value, path, issues, maxItems, maxLength = 500) =>
   return result;
 };
 
+/**
+ * @param {unknown} value
+ * @param {string} path
+ * @param {string[]} issues
+ * @returns {JsonValue}
+ */
 const normalizeJsonValue = (value, path, issues) => {
   if (
     value == null ||
@@ -143,17 +279,18 @@ const normalizeJsonValue = (value, path, issues) => {
     );
   }
   if (isPlainObject(value)) {
-    return Object.fromEntries(
+    return /** @type {JsonObject} */ (Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
         normalizeJsonValue(item, `${path}.${key}`, issues)
       ])
-    );
+    ));
   }
   issues.push(`${path} must contain only JSON-compatible values`);
   return null;
 };
 
+/** @param {unknown} value @param {string} path @param {string[]} issues @returns {JsonValue} */
 const normalizeTestValue = (value, path, issues) => {
   const normalized = normalizeJsonValue(value, path, issues);
   let serialized = '';
@@ -170,6 +307,7 @@ const normalizeTestValue = (value, path, issues) => {
   return normalized;
 };
 
+/** @param {unknown} value @param {string} path @param {string[]} issues @returns {NormalizedTest[]} */
 const normalizeTests = (value, path, issues) => {
   if (value == null) return [];
   if (!Array.isArray(value)) {
@@ -228,6 +366,7 @@ const normalizeTests = (value, path, issues) => {
     });
 };
 
+/** @param {unknown} value @param {string[]} issues @returns {NormalizedExample[]} */
 const normalizeExamples = (value, issues) => {
   if (value == null) return [];
   if (!Array.isArray(value)) {
@@ -269,6 +408,7 @@ const normalizeExamples = (value, issues) => {
   });
 };
 
+/** @param {unknown} value @param {string[]} issues @returns {Record<string, string>} */
 const normalizeStarterCode = (value, issues) => {
   if (value == null) return {};
   const object = ensurePlainObject(value, 'starterCode', issues);
@@ -278,6 +418,7 @@ const normalizeStarterCode = (value, issues) => {
       `starterCode exceeds ${PROBLEM_LIMITS.starterLanguages} languages`
     );
   }
+  /** @type {Record<string, string>} */
   const result = {};
   for (const [language, code] of entries.slice(0, PROBLEM_LIMITS.starterLanguages)) {
     const normalizedLanguage = String(language).trim().toLowerCase();
@@ -299,6 +440,7 @@ const normalizeStarterCode = (value, issues) => {
   return result;
 };
 
+/** @param {unknown} title @returns {string} */
 export const slugifyProblemTitle = (title) =>
   String(title || '')
     .normalize('NFKD')
@@ -309,18 +451,19 @@ export const slugifyProblemTitle = (title) =>
     .slice(0, PROBLEM_LIMITS.slug)
     .replace(/-+$/g, '');
 
+/** @param {unknown} input @returns {NormalizedProblem} */
 export const normalizeProblem = (input) => {
+  /** @type {string[]} */
   const issues = [];
   const source = ensurePlainObject(input, 'problem', issues);
   const unknownKeys = Object.keys(source).filter((key) => !ALLOWED_KEYS.has(key));
   if (unknownKeys.length) issues.push(`unknown keys: ${unknownKeys.join(', ')}`);
+  const rawId = source.id;
   if (
-    source.id != null &&
+    rawId != null &&
     !(
-      (Number.isSafeInteger(source.id) && source.id >= 0) ||
-      (typeof source.id === 'string' &&
-        source.id.length > 0 &&
-        source.id.length <= 200)
+      (typeof rawId === 'number' && Number.isSafeInteger(rawId) && rawId >= 0) ||
+      (typeof rawId === 'string' && rawId.length > 0 && rawId.length <= 200)
     )
   ) {
     issues.push('id must be a non-negative integer or a non-empty bounded string');
@@ -338,11 +481,16 @@ export const normalizeProblem = (input) => {
     issues.push('slug must contain lowercase letters, numbers, and single hyphens');
   }
 
+  const provenance = normalizeProvenance(source.provenance, issues);
+
   const statement = boundedString(
     source.statement ?? source.description,
     'statement',
     issues,
-    { required: true, max: PROBLEM_LIMITS.statement }
+    {
+      required: !isRestrictedMetadataOnly(provenance),
+      max: PROBLEM_LIMITS.statement
+    }
   );
   const difficulty = boundedString(source.difficulty, 'difficulty', issues, {
     required: true,
@@ -352,8 +500,9 @@ export const normalizeProblem = (input) => {
     issues.push('difficulty must be easy, medium, or hard');
   }
 
+  const firstTag = Array.isArray(source.tags) ? source.tags[0] : undefined;
   const topic = boundedString(
-    source.topic ?? source.tags?.[0] ?? 'general',
+    source.topic ?? firstTag ?? 'general',
     'topic',
     issues,
     { required: true, max: 80 }
@@ -395,23 +544,30 @@ export const normalizeProblem = (input) => {
     issues
   );
   const hiddenTests = normalizeTests(source.hiddenTests, 'hiddenTests', issues);
-  if (visibleTests.length + hiddenTests.length === 0) {
+  if (isRestrictedMetadataOnly(provenance) && hiddenTests.length > 0) {
+    issues.push('restricted metadata-only problems cannot include hiddenTests');
+  }
+  if (
+    !isRestrictedMetadataOnly(provenance) &&
+    visibleTests.length + hiddenTests.length === 0
+  ) {
     issues.push('at least one visible or hidden test is required');
   }
 
   const rawMetadata = ensurePlainObject(source.metadata ?? {}, 'metadata', issues);
-  const metadata = normalizeJsonValue(
+  const metadata = /** @type {JsonObject} */ (normalizeJsonValue(
     rawMetadata,
     'metadata',
     issues
-  );
+  ));
   const metadataBytes = Buffer.byteLength(JSON.stringify(metadata ?? {}), 'utf8');
   if (metadataBytes > PROBLEM_LIMITS.metadataBytes) {
     issues.push(`metadata exceeds ${PROBLEM_LIMITS.metadataBytes} bytes`);
   }
 
+  /** @type {NormalizedProblem} */
   const normalized = {
-    ...(source.id == null ? {} : { id: source.id }),
+    ...(rawId == null ? {} : { id: /** @type {string | number} */ (rawId) }),
     title,
     slug,
     statement,
@@ -454,6 +610,7 @@ export const normalizeProblem = (input) => {
       { min: 16, max: PROBLEM_LIMITS.memoryLimitMb, defaultValue: 128 }
     ),
     metadata,
+    provenance,
     version: boundedString(String(source.version ?? '1'), 'version', issues, {
       required: true,
       max: 80
@@ -464,6 +621,7 @@ export const normalizeProblem = (input) => {
   return normalized;
 };
 
+/** @param {unknown} input @returns {{ success: true, data: NormalizedProblem, issues: string[] } | { success: false, data: null, issues: string[] }} */
 export const validateProblem = (input) => {
   try {
     return { success: true, data: normalizeProblem(input), issues: [] };

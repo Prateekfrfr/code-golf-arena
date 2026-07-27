@@ -78,3 +78,19 @@ test('rejects problem documents with no tests', () => {
     /at least one visible or hidden test/
   );
 });
+
+test('restricted metadata-only problems cannot carry hidden tests', () => {
+  assert.throws(
+    () => normalizeProblem({
+      title: 'Restricted hidden test',
+      difficulty: 'easy',
+      hiddenTests: [{ input: 'secret', expectedOutput: 'secret' }],
+      provenance: {
+        state: 'RESTRICTED_METADATA_ONLY',
+        attribution: 'LeetCode',
+        canonicalUrl: 'https://leetcode.com/problems/restricted-hidden-test/'
+      }
+    }),
+    /cannot include hiddenTests/
+  );
+});

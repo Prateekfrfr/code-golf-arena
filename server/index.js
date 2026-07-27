@@ -19,18 +19,46 @@ import { buildSubmissionAnalytics } from './analytics/summaryBuilder.js';
 import { createDefaultCompressionAnalyzerRegistry } from './compression/index.js';
 import { isAllowedOrigin, serverConfig } from './config.js';
 import { createExecutionQueue } from './execution/executionQueue.js';
+import { createPostgresDatabase } from './db/postgres.js';
+import {
+  createPostgresProblemRepository,
+  createPostgresSubmissionRepository,
+  createPostgresAuthRepository,
+  createPostgresLeaderboardRepository
+} from './db/repositories/index.js';
+import { AppError, ValidationError } from './errors/index.js';
+import {
+  AuthenticationError,
+  createAuthService
+} from './auth/index.js';
+import {
+  createSessionClearCookie,
+  createSessionSetCookie,
+  readSessionCookie
+} from './auth/httpCookies.js';
 import { judgeSubmission } from './judge.js';
-import { createProblemProvider } from './problemProviders/index.js';
+import {
+  createAlfaClient,
+  createAlfaProblemProvider,
+  createDatabaseProblemProvider,
+  createProblemProvider
+} from './problemProviders/index.js';
+import { createCorrelationId, logger } from './observability/logger.js';
 import { toPublicProblem } from './problems/problemProjection.js';
 import { createSocketRateLimiter } from './rateLimit/socketRateLimiter.js';
+import { createRedisSocketRateLimiter } from './rateLimit/redisSocketRateLimiter.js';
 import { createReplayRepository } from './repositories/replayRepository.js';
 import { createInMemoryRoomRepository } from './repositories/roomRepository.js';
+import { createRedisRoomRepository } from './repositories/redisRoomRepository.js';
 import { createScoreRepository } from './repositories/scoreRepository.js';
 import { createSubmissionRepository } from './repositories/submissionRepository.js';
 import { buildScoreBreakdown } from './scoring/scoreBreakdown.js';
 import { calculateScore } from './scoring/scoreEngine.js';
 import {
-  PayloadValidationError,
+  createRedisClientBoundary,
+  wireSocketIoRedisAdapter
+} from './redis/redisSocketAdapter.js';
+import {
   parseAntiCheatEvent,
   parseCodeUpdate,
   parseRoomCode,
@@ -39,6 +67,13 @@ import {
 
 const app = express();
 app.disable('x-powered-by');
+app.use(express.json({ limit: '16kb', strict: true }));
+app.use((request, response, next) => {
+  const correlationId = createCorrelationId();
+  request.correlationId = correlationId;
+  response.set('X-Correlation-Id', correlationId);
+  next();
+});
 app.use(
   cors({
     origin(origin, callback) {
@@ -47,30 +82,132 @@ app.use(
         isAllowedOrigin(origin)
       );
     },
-    methods: ['GET']
+    methods: ['GET', 'POST', 'PATCH'],
+    credentials: true
   })
 );
+app.use((request, response, next) => {
+  const isStateChanging = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
+  const origin = request.get('origin');
+  const fetchSite = request.get('sec-fetch-site');
+  if (
+    isStateChanging &&
+    (fetchSite === 'cross-site' || (origin && !isAllowedOrigin(origin)))
+  ) {
+    response.status(403).json({ error: 'Cross-site requests are not allowed.' });
+    return;
+  }
+  next();
+});
+app.use(async (request, _response, next) => {
+  request.authUser = null;
+  const sessionSecret = readSessionCookie(
+    request.get('cookie'),
+    serverConfig.auth.sessionCookieName
+  );
+  if (!authService || !sessionSecret) {
+    next();
+    return;
+  }
+  try {
+    request.authUser = await authService.getSessionUser(sessionSecret);
+    next();
+  } catch (error) {
+    if (error instanceof AuthenticationError || error instanceof ValidationError) {
+      next();
+      return;
+    }
+    next(error);
+  }
+});
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   maxHttpBufferSize: serverConfig.maxCodeBytes + 16 * 1024,
   cors: {
     origin: serverConfig.corsOrigins,
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
-const roomRepository = createInMemoryRoomRepository();
+const redisBoundary = serverConfig.ephemeralStateMode === 'redis'
+  ? createRedisClientBoundary({
+      url: serverConfig.redis.url,
+      namespace: serverConfig.redis.keyPrefix,
+      requireTls: process.env.NODE_ENV === 'production',
+      reconnect: { maxDelayMs: serverConfig.redis.reconnectMaxDelayMs }
+    })
+  : null;
+const redisSocketAdapter = redisBoundary
+  ? await wireSocketIoRedisAdapter({ io, redis: redisBoundary })
+  : null;
+const roomRepository = redisBoundary
+  ? createRedisRoomRepository({
+      client: redisBoundary.publisher,
+      namespace: `${serverConfig.redis.keyPrefix}:room`,
+      ttlSeconds: Math.floor(serverConfig.redis.roomTtlMs / 1000)
+    })
+  : createInMemoryRoomRepository();
 const replayRepository = createReplayRepository();
 const scoreRepository = createScoreRepository();
-const submissionRepository = createSubmissionRepository({
-  maxPerRoom: serverConfig.maxSubmissionRecordsPerRoom
-});
-const problemProvider = createProblemProvider();
+const database = serverConfig.persistenceMode === 'postgres'
+  ? createPostgresDatabase({
+      connectionString: serverConfig.database.url,
+      max: serverConfig.database.poolMax,
+      idleTimeoutMs: serverConfig.database.idleTimeoutMs,
+      connectionTimeoutMs: serverConfig.database.connectionTimeoutMs
+    })
+  : null;
+const postgresProblemRepository = database
+  ? createPostgresProblemRepository({ database })
+  : null;
+const authRepository = database
+  ? createPostgresAuthRepository({ database })
+  : null;
+const authService = authRepository
+  ? createAuthService({
+      repository: authRepository,
+      sessionTtlMs: serverConfig.auth.sessionTtlMs,
+      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined
+    })
+  : null;
+const leaderboardRepository = database
+  ? createPostgresLeaderboardRepository({ database })
+  : null;
+const submissionRepository = database
+  ? createPostgresSubmissionRepository({ database })
+  : createSubmissionRepository({
+      maxPerRoom: serverConfig.maxSubmissionRecordsPerRoom
+    });
+const problemProvider = postgresProblemRepository
+  ? createDatabaseProblemProvider({ repository: postgresProblemRepository })
+  : createProblemProvider();
+const alfaProblemProvider = database && serverConfig.alfa.apiUrl
+  ? createAlfaProblemProvider({
+      client: createAlfaClient({
+        baseUrl: serverConfig.alfa.apiUrl,
+        timeoutMs: serverConfig.alfa.timeoutMs,
+        concurrency: serverConfig.alfa.syncConcurrency,
+        retry: { maxRetries: serverConfig.alfa.maxRetries }
+      }),
+      repository: postgresProblemRepository,
+      sourceLocator: serverConfig.alfa.apiUrl,
+      cacheTtlDays: serverConfig.alfa.cacheTtlDays,
+      cacheVersion: serverConfig.alfa.cacheVersion,
+      storeFullContent: serverConfig.alfa.storeFullContent
+    })
+  : null;
 const executionQueue = createExecutionQueue({
   concurrency: serverConfig.executionConcurrency
 });
-const socketRateLimiter = createSocketRateLimiter();
+const socketRateLimiter = redisBoundary
+  ? createRedisSocketRateLimiter({
+      client: redisBoundary.publisher,
+      namespace: `${serverConfig.redis.keyPrefix}:socket-rate-limit`,
+      onError: (error) => logger.error('redis.rate_limit.failed', { error })
+    })
+  : createSocketRateLimiter();
 const compressionAnalyzers = createDefaultCompressionAnalyzerRegistry();
 const antiCheatRuleEngine = createDefaultAntiCheatRuleEngine();
 const allowedAntiCheatTypes = new Set([
@@ -88,15 +225,16 @@ const PLAYER_ID_PATTERN =
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const getPlayerId = (socket) => socket.data.playerId;
+const getAccountId = (socket) => socket.data.accountId || null;
 
-const createRoomCode = () => {
+const createRoomCode = async () => {
   let roomCode;
 
   do {
     roomCode = Array.from({ length: 8 }, () =>
       ROOM_CODE_ALPHABET[crypto.randomInt(ROOM_CODE_ALPHABET.length)]
     ).join('');
-  } while (roomRepository.has(roomCode));
+  } while (await roomRepository.has(roomCode));
 
   return roomCode;
 };
@@ -115,14 +253,14 @@ const emitRateLimitError = (socket, retryAfterMs) => {
   );
 };
 
-const consumeRateLimit = (socket, ruleName) => {
+const consumeRateLimit = async (socket, ruleName) => {
   const identity = `${socket.handshake.address}:${getPlayerId(socket)}`;
-  const result = socketRateLimiter.consume(identity, ruleName);
+  const result = await socketRateLimiter.consume(identity, ruleName);
   if (!result.allowed) emitRateLimitError(socket, result.retryAfterMs);
   return result.allowed;
 };
 
-const getRoomOrError = (socket, roomCodeInput, { requireMember = true } = {}) => {
+const getRoomOrError = async (socket, roomCodeInput, { requireMember = true } = {}) => {
   let roomCode;
 
   try {
@@ -132,7 +270,7 @@ const getRoomOrError = (socket, roomCodeInput, { requireMember = true } = {}) =>
     return { roomCode: '', room: null };
   }
 
-  const room = roomRepository.get(roomCode);
+  const room = await roomRepository.get(roomCode);
   if (!room) {
     emitRoomError(socket, 'Room not found.');
     return { roomCode, room: null };
@@ -165,13 +303,16 @@ const loadJudgeProblem = async (topic) => {
   return judgeProblem;
 };
 
-const scheduleCleanup = (roomCode, room) => {
+const scheduleCleanup = async (roomCode, room) => {
   if (room.connectedPlayers.length > 0 || room.cleanupTimer) return;
 
-  room.cleanupTimer = setTimeout(() => {
-    roomRepository.delete(roomCode);
-    submissionRepository.deleteRoom(roomCode);
+  room.cleanupTimer = setTimeout(async () => {
+    await roomRepository.delete(roomCode);
+    Promise.resolve(submissionRepository.deleteRoom(roomCode)).catch((error) => {
+      logger.error('submission.cleanup.failed', { roomCode, error });
+    });
   }, serverConfig.roomCleanupMs);
+  await roomRepository.save(roomCode, room);
 };
 
 const getAntiCheatSession = (roomCode, room, playerId) => {
@@ -187,7 +328,7 @@ const getAntiCheatSession = (roomCode, room, playerId) => {
   return session;
 };
 
-const recordIntegrityEvent = (
+const recordIntegrityEvent = async (
   roomCode,
   room,
   playerId,
@@ -234,6 +375,7 @@ const recordIntegrityEvent = (
     });
   }
 
+  await roomRepository.save(roomCode, room);
   return outcome;
 };
 
@@ -253,11 +395,11 @@ const buildAntiCheatSummary = (room) => ({
   )
 });
 
-const handleCreateRoom = (socket, options = {}) => {
-  if (!consumeRateLimit(socket, 'roomMutation')) return;
+const handleCreateRoom = async (socket, options = {}) => {
+  if (!(await consumeRateLimit(socket, 'roomMutation'))) return;
 
-  const roomCode = createRoomCode();
-  roomRepository.create(
+  const roomCode = await createRoomCode();
+  await roomRepository.create(
     roomCode,
     getPlayerId(socket),
     'multiplayer',
@@ -268,10 +410,10 @@ const handleCreateRoom = (socket, options = {}) => {
 };
 
 const handleStartSolo = async (socket, options = {}) => {
-  if (!consumeRateLimit(socket, 'roomMutation')) return;
+  if (!(await consumeRateLimit(socket, 'roomMutation'))) return;
 
-  const roomCode = createRoomCode();
-  const room = roomRepository.create(
+  const roomCode = await createRoomCode();
+  const room = await roomRepository.create(
     roomCode,
     getPlayerId(socket),
     'solo',
@@ -283,8 +425,9 @@ const handleStartSolo = async (socket, options = {}) => {
     room.problem = await loadJudgeProblem(room.topic);
     room.startTime = Date.now();
     room.status = 'active';
+    await roomRepository.save(roomCode, room);
   } catch (error) {
-    roomRepository.delete(roomCode);
+    await roomRepository.delete(roomCode);
     throw error;
   }
 
@@ -295,9 +438,9 @@ const handleStartSolo = async (socket, options = {}) => {
 };
 
 const handleJoinRoom = async (socket, roomCodeInput) => {
-  if (!consumeRateLimit(socket, 'roomMutation')) return;
+  if (!(await consumeRateLimit(socket, 'roomMutation'))) return;
 
-  const { roomCode, room } = getRoomOrError(socket, roomCodeInput, {
+  const { roomCode, room } = await getRoomOrError(socket, roomCodeInput, {
     requireMember: false
   });
   if (!room) return;
@@ -313,15 +456,16 @@ const handleJoinRoom = async (socket, roomCodeInput) => {
     return;
   }
 
-  roomRepository.clearCleanup(room);
-  roomRepository.addPlayer(room, playerId);
-  roomRepository.markConnected(room, playerId);
+  await roomRepository.clearCleanup(room);
+  await roomRepository.addPlayer(room, playerId);
+  await roomRepository.markConnected(room, playerId);
   socket.join(roomCode);
 
   if (room.players.length === 2 && !room.problem) {
     room.problem = await loadJudgeProblem(room.topic);
     room.startTime = Date.now();
     room.status = 'active';
+    await roomRepository.save(roomCode, room);
   }
 
   if (room.players.length === 2) {
@@ -332,14 +476,14 @@ const handleJoinRoom = async (socket, roomCodeInput) => {
   }
 };
 
-const handleRejoinRoom = (socket, roomCodeInput) => {
-  if (!consumeRateLimit(socket, 'roomRead')) return;
+const handleRejoinRoom = async (socket, roomCodeInput) => {
+  if (!(await consumeRateLimit(socket, 'roomRead'))) return;
 
-  const { roomCode, room } = getRoomOrError(socket, roomCodeInput);
+  const { roomCode, room } = await getRoomOrError(socket, roomCodeInput);
   if (!room) return;
 
-  roomRepository.clearCleanup(room);
-  roomRepository.markConnected(room, getPlayerId(socket));
+  await roomRepository.clearCleanup(room);
+  await roomRepository.markConnected(room, getPlayerId(socket));
   socket.join(roomCode);
 
   if (room.problem) {
@@ -355,14 +499,19 @@ const handleRejoinRoom = (socket, roomCodeInput) => {
 };
 
 const handleSubmitCode = async (socket, payload) => {
-  if (!consumeRateLimit(socket, 'submission')) return;
+  if (!(await consumeRateLimit(socket, 'submission'))) return;
 
   const submission = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
-  const { roomCode, room } = getRoomOrError(socket, submission.roomCode);
+  const { roomCode, room } = await getRoomOrError(socket, submission.roomCode);
   if (!room) return;
 
   const playerId = getPlayerId(socket);
+  const accountId = getAccountId(socket);
   const antiCheatSession = getAntiCheatSession(roomCode, room, playerId);
+  // A session may be created before an invalid/no-problem return. Persist it
+  // immediately so that a subsequent request handled by another process sees
+  // the same anti-cheat state.
+  await roomRepository.save(roomCode, room);
   if (isSessionInvalidated(antiCheatSession)) {
     socket.emit(SocketEvents.SUBMISSION_RESULT, {
       output: 'This submission session has been invalidated.',
@@ -384,7 +533,7 @@ const handleSubmitCode = async (socket, payload) => {
     return;
   }
 
-  const integrityOutcome = recordIntegrityEvent(
+  const integrityOutcome = await recordIntegrityEvent(
     roomCode,
     room,
     playerId,
@@ -425,10 +574,16 @@ const handleSubmitCode = async (socket, payload) => {
   const compression = judgeResult.success
     ? compressionAnalyzers.analyze(submission.language, submission.code)
     : null;
-  const storedSubmission = submissionRepository.add(roomCode, {
+  const submissionId = crypto.randomUUID();
+  const submittedAt = Date.now();
+  const submissionRecord = {
+    id: submissionId,
+    submittedAt,
     playerId,
-    userId: playerId,
+    userId: accountId || playerId,
+    ...(accountId ? { accountId } : {}),
     problemId: room.problem.slug,
+    sourceCode: submission.code,
     language: submission.language,
     success: judgeResult.success,
     status: judgeResult.success ? 'accepted' : 'rejected',
@@ -438,6 +593,7 @@ const handleSubmitCode = async (socket, payload) => {
     runtimeMs: judgeResult.runtimeMs,
     memoryBytes: judgeResult.memoryBytes,
     score: scoreResult.score,
+    maxScore: scoreResult.maxScore,
     scoreBreakdown,
     compression,
     compressionScore: compression
@@ -446,15 +602,19 @@ const handleSubmitCode = async (socket, payload) => {
             Math.max(1, compression.sourceLength)
         )
       : null
-  });
+  };
   const analytics = buildSubmissionAnalytics(
-    submissionRepository.list(roomCode),
+    [...(await submissionRepository.list(roomCode)), submissionRecord],
     {
-      userId: playerId,
+      userId: accountId || playerId,
       problemId: room.problem.slug,
-      submissionId: storedSubmission.id
+      submissionId
     }
   );
+  const storedSubmission = await submissionRepository.add(roomCode, {
+    ...submissionRecord,
+    analytics
+  });
   const result = {
     ...judgeResult,
     submissionId: storedSubmission.id,
@@ -482,6 +642,7 @@ const handleSubmitCode = async (socket, payload) => {
       scoreBreakdown
     }
   );
+  await roomRepository.save(roomCode, room);
 
   if (leaderboardChanged) {
     io.to(roomCode).emit(
@@ -495,20 +656,49 @@ const runSocketHandler = (socket, label, handler) => {
   Promise.resolve()
     .then(handler)
     .catch((error) => {
-      if (error instanceof PayloadValidationError) {
+      if (error instanceof ValidationError) {
         emitRoomError(socket, error.message);
         return;
       }
 
-      console.error(`${label} failed:`, error);
+      logger.error('socket.handler.failed', {
+        correlationId: socket.data.correlationId,
+        handler: label,
+        error
+      });
       emitRoomError(socket, 'The request could not be completed.');
     });
 };
 
 io.use((socket, next) => {
-  const guestId = String(socket.handshake.auth?.guestId || '').trim();
-  socket.data.playerId = PLAYER_ID_PATTERN.test(guestId) ? guestId : socket.id;
-  next();
+  const sessionSecret = readSessionCookie(
+    socket.handshake.headers.cookie,
+    serverConfig.auth.sessionCookieName
+  );
+  Promise.resolve()
+    .then(async () => {
+      if (!authService || !sessionSecret) return null;
+      try {
+        return await authService.getSessionUser(sessionSecret);
+      } catch (error) {
+        if (error instanceof AuthenticationError || error instanceof ValidationError) {
+          return null;
+        }
+        throw error;
+      }
+    })
+    .then((account) => {
+      const guestId = String(socket.handshake.auth?.guestId || '').trim();
+      socket.data.playerId = account?.id ||
+        (PLAYER_ID_PATTERN.test(guestId) ? guestId : socket.id);
+      socket.data.accountId = account?.id || null;
+      socket.data.correlationId = createCorrelationId();
+      next();
+    })
+    .catch((error) => {
+      logger.error('socket.authentication.failed', { error });
+      next(new Error('Socket authentication is unavailable.'));
+    });
 });
 
 io.on('connection', (socket) => {
@@ -516,13 +706,15 @@ io.on('connection', (socket) => {
     playerId: getPlayerId(socket)
   });
 
-  socket.on('disconnect', () => {
-    const playerId = getPlayerId(socket);
-    for (const [roomCode, room] of roomRepository.values()) {
-      roomRepository.markDisconnected(room, playerId);
-      scheduleCleanup(roomCode, room);
-    }
-  });
+  socket.on('disconnect', () =>
+    runSocketHandler(socket, 'disconnect', async () => {
+      const playerId = getPlayerId(socket);
+      for (const [roomCode, room] of await roomRepository.values()) {
+        await roomRepository.markDisconnected(room, playerId);
+        await scheduleCleanup(roomCode, room);
+      }
+    })
+  );
 
   socket.on(SocketEvents.CREATE_ROOM, (options) =>
     runSocketHandler(socket, 'create-room', () =>
@@ -545,19 +737,21 @@ io.on('connection', (socket) => {
     )
   );
 
-  socket.on(SocketEvents.GET_PROBLEM, (roomCodeInput) => {
-    if (!consumeRateLimit(socket, 'roomRead')) return;
-    const { room } = getRoomOrError(socket, roomCodeInput);
-    if (room?.problem) {
-      socket.emit(SocketEvents.PROBLEM, toPublicProblem(room.problem));
-    }
-  });
+  socket.on(SocketEvents.GET_PROBLEM, (roomCodeInput) =>
+    runSocketHandler(socket, 'get-problem', async () => {
+      if (!(await consumeRateLimit(socket, 'roomRead'))) return;
+      const { room } = await getRoomOrError(socket, roomCodeInput);
+      if (room?.problem) {
+        socket.emit(SocketEvents.PROBLEM, toPublicProblem(room.problem));
+      }
+    })
+  );
 
   socket.on(SocketEvents.CODE_UPDATE, (payload) =>
-    runSocketHandler(socket, 'code-update', () => {
-      if (!consumeRateLimit(socket, 'codeUpdate')) return;
+    runSocketHandler(socket, 'code-update', async () => {
+      if (!(await consumeRateLimit(socket, 'codeUpdate'))) return;
       const update = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
-      const { roomCode, room } = getRoomOrError(socket, update.roomCode);
+      const { roomCode, room } = await getRoomOrError(socket, update.roomCode);
       if (!room) return;
 
       socket.to(roomCode).emit(SocketEvents.CODE_UPDATE, {
@@ -566,6 +760,7 @@ io.on('connection', (socket) => {
         language: update.language
       });
       replayRepository.addFrame(room, getPlayerId(socket), update);
+      await roomRepository.save(roomCode, room);
     })
   );
 
@@ -575,33 +770,37 @@ io.on('connection', (socket) => {
     )
   );
 
-  socket.on(SocketEvents.GET_REPLAY, (roomCodeInput) => {
-    if (!consumeRateLimit(socket, 'roomRead')) return;
-    const { room } = getRoomOrError(socket, roomCodeInput);
-    socket.emit(
-      SocketEvents.REPLAY_DATA,
-      room ? replayRepository.getPayload(room) : null
-    );
-  });
-
-  socket.on(SocketEvents.GET_ANTI_CHEAT_SUMMARY, (roomCodeInput) => {
-    if (!consumeRateLimit(socket, 'roomRead')) return;
-    const { room } = getRoomOrError(socket, roomCodeInput);
-    if (room) {
+  socket.on(SocketEvents.GET_REPLAY, (roomCodeInput) =>
+    runSocketHandler(socket, 'get-replay', async () => {
+      if (!(await consumeRateLimit(socket, 'roomRead'))) return;
+      const { room } = await getRoomOrError(socket, roomCodeInput);
       socket.emit(
-        SocketEvents.ANTI_CHEAT_SUMMARY,
-        buildAntiCheatSummary(room)
+        SocketEvents.REPLAY_DATA,
+        room ? replayRepository.getPayload(room) : null
       );
-    }
-  });
+    })
+  );
+
+  socket.on(SocketEvents.GET_ANTI_CHEAT_SUMMARY, (roomCodeInput) =>
+    runSocketHandler(socket, 'get-anti-cheat-summary', async () => {
+      if (!(await consumeRateLimit(socket, 'roomRead'))) return;
+      const { room } = await getRoomOrError(socket, roomCodeInput);
+      if (room) {
+        socket.emit(
+          SocketEvents.ANTI_CHEAT_SUMMARY,
+          buildAntiCheatSummary(room)
+        );
+      }
+    })
+  );
 
   socket.on(SocketEvents.ANTI_CHEAT_EVENT, (payload = {}) =>
-    runSocketHandler(socket, 'anti-cheat-event', () => {
-      if (!consumeRateLimit(socket, 'telemetry')) return;
+    runSocketHandler(socket, 'anti-cheat-event', async () => {
+      if (!(await consumeRateLimit(socket, 'telemetry'))) return;
       const event = parseAntiCheatEvent(payload, allowedAntiCheatTypes);
-      const { roomCode, room } = getRoomOrError(socket, event.roomCode);
+      const { roomCode, room } = await getRoomOrError(socket, event.roomCode);
       if (!room) return;
-      recordIntegrityEvent(
+      await recordIntegrityEvent(
         roomCode,
         room,
         getPlayerId(socket),
@@ -617,21 +816,177 @@ app.get('/health', (_request, response) => {
     status: 'ok',
     service: 'code-golf-arena',
     executionQueue: executionQueue.getStats(),
-    problemProvider: 'local'
+    problemProvider: serverConfig.persistenceMode === 'postgres' ? 'postgres' : 'local',
+    persistence: serverConfig.persistenceMode,
+    authentication: authService ? 'postgres-session' : 'guest-only',
+    ephemeralState: serverConfig.ephemeralStateMode
   });
 });
 
+const requirePersistentAccounts = (_request, response, next) => {
+  if (!authService) {
+    response.status(503).json({ error: 'Accounts require PostgreSQL persistence.' });
+    return;
+  }
+  next();
+};
+
+const requireAuthenticatedUser = (request, response, next) => {
+  if (!request.authUser) {
+    response.status(401).json({ error: 'Authentication is required.' });
+    return;
+  }
+  next();
+};
+
+const requireAdministrator = (request, response, next) => {
+  if (!request.authUser) {
+    response.status(401).json({ error: 'Authentication is required.' });
+    return;
+  }
+  if (request.authUser.role !== 'admin') {
+    response.status(403).json({ error: 'Administrator access is required.' });
+    return;
+  }
+  next();
+};
+
+const setSessionCookie = (response, sessionSecret, expiresAt) => {
+  response.set('Set-Cookie', createSessionSetCookie({
+    cookieName: serverConfig.auth.sessionCookieName,
+    sessionSecret,
+    expiresAt,
+    secure: process.env.NODE_ENV === 'production'
+  }));
+};
+
+app.post('/api/auth/register', requirePersistentAccounts, async (request, response, next) => {
+  try {
+    const session = await authService.register(request.body);
+    setSessionCookie(response, session.sessionSecret, session.expiresAt);
+    response.status(201).json({ user: session.user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/login', requirePersistentAccounts, async (request, response, next) => {
+  try {
+    const session = await authService.login(request.body);
+    setSessionCookie(response, session.sessionSecret, session.expiresAt);
+    response.json({ user: session.user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/logout', requirePersistentAccounts, async (request, response, next) => {
+  try {
+    const sessionSecret = readSessionCookie(
+      request.get('cookie'),
+      serverConfig.auth.sessionCookieName
+    );
+    if (sessionSecret) {
+      try {
+        await authService.logout(sessionSecret);
+      } catch (error) {
+        if (!(error instanceof AuthenticationError || error instanceof ValidationError)) {
+          throw error;
+        }
+      }
+    }
+    response.set('Set-Cookie', createSessionClearCookie({
+      cookieName: serverConfig.auth.sessionCookieName,
+      secure: process.env.NODE_ENV === 'production'
+    }));
+    response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/auth/me', requirePersistentAccounts, requireAuthenticatedUser, (request, response) => {
+  response.json({ user: request.authUser });
+});
+
+app.patch('/api/auth/me', requirePersistentAccounts, requireAuthenticatedUser, async (request, response, next) => {
+  try {
+    const user = await authService.updateProfile(request.authUser.id, request.body);
+    response.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const requirePersistentLeaderboards = (_request, response, next) => {
+  if (!leaderboardRepository) {
+    response.status(503).json({ error: 'Leaderboards require PostgreSQL persistence.' });
+    return;
+  }
+  next();
+};
+
+app.get('/api/leaderboards/global', requirePersistentLeaderboards, async (request, response, next) => {
+  try {
+    response.json(await leaderboardRepository.getGlobalLeaderboard(request.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/leaderboards/problems/:slug', requirePersistentLeaderboards, async (request, response, next) => {
+  try {
+    response.json(await leaderboardRepository.getProblemLeaderboard(request.params.slug, request.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/leaderboards/languages/:language', requirePersistentLeaderboards, async (request, response, next) => {
+  try {
+    response.json(await leaderboardRepository.getLanguageLeaderboard(request.params.language, request.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/leaderboards/me', requirePersistentLeaderboards, requireAuthenticatedUser, async (request, response, next) => {
+  try {
+    response.json(await leaderboardRepository.getPersonalLeaderboard(request.authUser.id, request.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/progress', requirePersistentLeaderboards, requireAuthenticatedUser, async (request, response, next) => {
+  try {
+    response.json(await leaderboardRepository.getProgress(request.authUser.id, request.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+const problemQueryForRequest = (request) => {
+  const solved = String(request.query.solved || '').trim().toLowerCase();
+  if (solved && !request.authUser) {
+    throw new AuthenticationError('Authentication is required for solved filtering.');
+  }
+  return {
+    search: request.query.search,
+    topic: request.query.topic,
+    difficulty: request.query.difficulty,
+    language: request.query.language,
+    tag: request.query.tag,
+    solved,
+    userId: request.authUser?.id,
+    cursor: request.query.cursor,
+    limit: request.query.limit
+  };
+};
+
 app.get('/api/problems', async (request, response, next) => {
   try {
-    const result = await problemProvider.listProblems({
-      search: request.query.search,
-      topic: request.query.topic,
-      difficulty: request.query.difficulty,
-      language: request.query.language,
-      tag: request.query.tag,
-      cursor: request.query.cursor,
-      limit: request.query.limit
-    });
+    const result = await problemProvider.listProblems(problemQueryForRequest(request));
     response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
     response.json(result);
   } catch (error) {
@@ -639,23 +994,113 @@ app.get('/api/problems', async (request, response, next) => {
   }
 });
 
-app.use((error, _request, response, _next) => {
-  void _next;
-  console.error('HTTP request failed:', error);
-  response.status(500).json({ error: 'Internal server error.' });
+app.get('/api/problems/search', async (request, response, next) => {
+  try {
+    const result = await problemProvider.listProblems(problemQueryForRequest(request));
+    response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
-const pruneInterval = setInterval(() => socketRateLimiter.prune(), 60_000);
-pruneInterval.unref();
+app.get('/api/problems/:slug', async (request, response, next) => {
+  try {
+    const slug = String(request.params.slug || '').trim().toLowerCase();
+    const problem = alfaProblemProvider
+      ? await alfaProblemProvider.getBySlug(slug)
+      : await problemProvider.getBySlug(slug);
+    if (!problem) {
+      response.status(404).json({ error: 'Problem not found.' });
+      return;
+    }
+    response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    response.json(problem);
+  } catch (error) {
+    next(error);
+  }
+});
+
+const requireAlfaAdmin = (request, response, next) => {
+  if (!alfaProblemProvider || !serverConfig.alfa.syncEnabled) {
+    response.status(403).json({ error: 'Admin problem sync is unavailable.' });
+    return;
+  }
+  requireAdministrator(request, response, next);
+};
+
+app.post('/api/admin/problems/sync/:slug', requireAlfaAdmin, async (request, response, next) => {
+  try {
+    const problem = await alfaProblemProvider.syncSlug(String(request.params.slug || ''));
+    logger.info('alfa.sync.completed', {
+      correlationId: request.correlationId,
+      slug: problem.slug,
+      mode: 'single'
+    });
+    response.status(201).json(problem);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/problems/sync', requireAlfaAdmin, async (request, response, next) => {
+  try {
+    const body = request.body && typeof request.body === 'object' ? request.body : {};
+    const tags = Array.isArray(body.tags)
+      ? body.tags
+      : typeof body.tags === 'string'
+        ? body.tags.split(',')
+        : undefined;
+    const result = await alfaProblemProvider.syncList({
+      difficulty: body.difficulty,
+      tags,
+      limit: body.limit ?? serverConfig.alfa.batchSize,
+      cursor: body.cursor
+    });
+    logger.info('alfa.sync.completed', {
+      correlationId: request.correlationId,
+      mode: 'bulk',
+      count: result.items.length
+    });
+    response.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, request, response, _next) => {
+  void _next;
+  const appError = error instanceof AppError ? error : null;
+  logger.error('http.request.failed', {
+    correlationId: request.correlationId,
+    method: request.method,
+    path: request.path,
+    error
+  });
+  response.status(appError?.statusCode ?? 500).json({
+    error: appError?.expose ? appError.message : 'Internal server error.'
+  });
+});
+
+const pruneInterval = typeof socketRateLimiter.prune === 'function'
+  ? setInterval(() => socketRateLimiter.prune(), 60_000)
+  : null;
+pruneInterval?.unref();
 
 httpServer.listen(serverConfig.port, () => {
-  console.log(`Server running on port ${serverConfig.port}`);
+  logger.info('server.listening', { port: serverConfig.port });
 });
 
 const shutdown = () => {
-  clearInterval(pruneInterval);
+  if (pruneInterval) clearInterval(pruneInterval);
   io.close(() => {
-    httpServer.close(() => process.exit(0));
+    httpServer.close(() => {
+      Promise.all([database?.close(), redisSocketAdapter?.close()])
+        .catch((error) => {
+          logger.error('server.shutdown.failed', { error });
+        })
+        .finally(() => process.exit(0));
+    });
   });
   setTimeout(() => process.exit(1), 10_000).unref();
 };

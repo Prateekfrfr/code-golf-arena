@@ -15,9 +15,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "typecheck:server": "npm --prefix server run typecheck",
     "test": "node --test \"server/{test,tests}/**/*.test.js\"",
     "problems:validate": "node server/scripts/problems/validate.js",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run check:server && npm run build"
+    "db:migrate": "npm --prefix server run db:migrate",
+    "db:migrate:down": "npm --prefix server run db:migrate:down",
+    "db:migrate:verify": "npm --prefix server run db:migrate:verify",
+    "db:seed": "npm --prefix server run db:seed",
+    "check": "npm run lint && npm run typecheck && npm run typecheck:server && npm run test && npm run check:server && npm run build"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

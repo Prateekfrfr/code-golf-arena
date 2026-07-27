@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "server/config.js",
+    "server/auth/**/*.js",
+    "server/db/**/*.js",
+    "server/errors/**/*.js",
+    "server/observability/**/*.js",
+    "server/problemProviders/databaseProblemProvider.js",
+    "server/problemProviders/alfa/client.js",
+    "server/problemProviders/alfa/errors.js",
+    "server/problemProviders/alfa/normalizer.js",
+    "server/problemProviders/problemProvider.js",
+    "server/problems/problemProjection.js",
+    "server/problems/problemSchema.js",
+    "server/rateLimit/redisSocketRateLimiter.js",
+    "server/redis/**/*.js",
+    "server/repositories/roomRepository.js",
+    "server/repositories/redisRoomRepository.js"
+  ]
+}

@@ -6,12 +6,20 @@ const DEFAULT_RULES = Object.freeze({
   telemetry: { limit: 40, windowMs: 60_000 }
 });
 
+/** @typedef {{ limit: number, windowMs: number }} RateLimitRule */
+/** @typedef {{ count: number, resetAt: number }} RateLimitBucket */
+
+/**
+ * @param {{ rules?: Record<string, RateLimitRule>, now?: () => number }} [options]
+ */
 export const createSocketRateLimiter = ({
   rules = DEFAULT_RULES,
   now = () => Date.now()
 } = {}) => {
+  /** @type {Map<string, RateLimitBucket>} */
   const buckets = new Map();
 
+  /** @param {string} identity @param {string} ruleName */
   const consume = (identity, ruleName) => {
     const rule = rules[ruleName];
     if (!rule) throw new Error(`Unknown rate-limit rule: ${ruleName}`);

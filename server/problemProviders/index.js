@@ -4,6 +4,19 @@ import { assertProblemProvider } from './problemProvider.js';
 export { createDatabaseProblemProvider } from './databaseProblemProvider.js';
 export { createFilesystemProblemProvider } from './filesystemProblemProvider.js';
 export { createGithubProblemProvider } from './githubProblemProvider.js';
+export {
+  AlfaCircuitOpenError,
+  AlfaError,
+  AlfaHttp4xxError,
+  AlfaHttp5xxError,
+  AlfaNetworkError,
+  AlfaQueueFullError,
+  AlfaSchemaError,
+  AlfaTimeoutError,
+  createAlfaClient,
+  createAlfaProblemProvider,
+  normalizeAlfaProblem
+} from './alfa/index.js';
 export { createLocalProblemProvider } from './localProblemProvider.js';
 export {
   assertProblemProvider,

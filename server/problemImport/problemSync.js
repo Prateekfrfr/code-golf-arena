@@ -1,7 +1,10 @@
 import { detectProblemDuplicates } from './duplicateDetector.js';
 import { createLicensePolicy } from './licensePolicy.js';
 import { createProblemVersion } from './versioning.js';
-import { normalizeProblem } from '../problems/problemSchema.js';
+import {
+  isRestrictedMetadataOnly,
+  normalizeProblem
+} from '../problems/problemSchema.js';
 
 const assertRepository = (repository) => {
   for (const method of [
@@ -27,8 +30,30 @@ export const createProblemSync = ({
 }) => {
   assertRepository(repository);
 
-  const buildPlan = async (store, records, source, duplicatePolicy) => {
+  const buildPlan = async (store, records, source, duplicatePolicy, archiveMissing) => {
     const normalized = records.map(normalizeProblem);
+    const sourceIsRestricted = source.provenance?.state === 'RESTRICTED_METADATA_ONLY';
+    for (const problem of normalized) {
+      const problemIsRestricted = isRestrictedMetadataOnly(problem.provenance);
+      if (sourceIsRestricted && !problemIsRestricted) {
+        throw new Error(
+          `Restricted metadata-only source requires restricted provenance on ${problem.slug}`
+        );
+      }
+      if (!sourceIsRestricted && problemIsRestricted) {
+        throw new Error(
+          `Restricted problem provenance requires a restricted metadata-only source: ${problem.slug}`
+        );
+      }
+      if (
+        sourceIsRestricted &&
+        problem.provenance.attribution !== source.provenance?.attribution
+      ) {
+        throw new Error(
+          `Restricted problem attribution must match its source: ${problem.slug}`
+        );
+      }
+    }
     const { unique, duplicates } = detectProblemDuplicates(normalized);
     const blockingDuplicates = duplicates.filter(
       (duplicate) =>
@@ -66,7 +91,9 @@ export const createProblemSync = ({
       });
     }
 
-    const previousSlugs = await store.listSlugsBySource(sourceKeyFor(source));
+    const previousSlugs = archiveMissing
+      ? await store.listSlugsBySource(sourceKeyFor(source))
+      : [];
     const archived = previousSlugs.filter((slug) => !currentSlugs.has(slug));
     return {
       source,
@@ -82,7 +109,8 @@ export const createProblemSync = ({
     async sync(records, {
       source: sourceInput,
       dryRun = false,
-      duplicatePolicy = 'skip-identical'
+      duplicatePolicy = 'skip-identical',
+      archiveMissing = true
     } = {}) {
       if (!Array.isArray(records)) throw new TypeError('records must be an array');
       if (!['skip-identical', 'reject'].includes(duplicatePolicy)) {
@@ -91,7 +119,13 @@ export const createProblemSync = ({
       const source = licensePolicy.validate(sourceInput);
 
       if (dryRun) {
-        const plan = await buildPlan(repository, records, source, duplicatePolicy);
+        const plan = await buildPlan(
+          repository,
+          records,
+          source,
+          duplicatePolicy,
+          archiveMissing
+        );
         return {
           dryRun: true,
           inserted: plan.writes.filter((item) => item.status === 'inserted').length,
@@ -108,7 +142,8 @@ export const createProblemSync = ({
           transaction,
           records,
           source,
-          duplicatePolicy
+          duplicatePolicy,
+          archiveMissing
         );
         for (const write of plan.writes) {
           await transaction.saveVersion({

@@ -94,6 +94,7 @@ export default function ProblemsPage() {
         const result = await fetch(endpoint, {
           signal: controller.signal,
           headers: { Accept: "application/json" },
+          credentials: "include",
         });
         if (!result.ok) {
           throw new Error(`Problem catalog returned ${result.status}.`);

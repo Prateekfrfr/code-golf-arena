@@ -17,6 +17,15 @@ Every configured source must provide:
 The default policy accepts only explicitly configured licenses. A missing or
 unapproved license fails before repository writes.
 
+## Restricted metadata-only provenance
+
+`RESTRICTED_METADATA_ONLY` is a distinct provenance state, not a license
+allowlist entry. It is used for Alfa/LeetCode metadata: each record requires
+attribution and an HTTPS canonical URL, cannot include hidden tests, cannot be
+converted to a judge problem, and publicly exposes only safe metadata plus that
+attribution/link. Restricted records are excluded from licensed-corpus and
+export workflows.
+
 ## GitHub provider safety
 
 The GitHub provider accepts an injected `fetch` implementation and requires:

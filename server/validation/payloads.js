@@ -1,4 +1,5 @@
 import { SUPPORTED_LANGUAGES } from '../../shared/events.js';
+import { ValidationError } from '../errors/index.js';
 
 const ROOM_CODE_PATTERN = /^[A-Z0-9]{6,12}$/;
 const TOPIC_PATTERN = /^[a-z0-9-]{1,40}$/;
@@ -6,11 +7,10 @@ const MAX_METADATA_KEYS = 12;
 const MAX_METADATA_VALUE_LENGTH = 240;
 const languageSet = new Set(SUPPORTED_LANGUAGES);
 
-export class PayloadValidationError extends Error {
+export class PayloadValidationError extends ValidationError {
   constructor(message, code = 'INVALID_PAYLOAD') {
-    super(message);
+    super(message, { code });
     this.name = 'PayloadValidationError';
-    this.code = code;
   }
 }
 

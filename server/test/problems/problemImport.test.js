@@ -145,3 +145,47 @@ test('licensing policy rejects unapproved or unattributed sources before writes'
   );
   assert.equal(repository.metrics().writes, 0);
 });
+
+test('restricted metadata-only provenance is explicit and never treated as a permissive license', async () => {
+  const repository = createRepository();
+  const sync = createProblemSync({ repository });
+  const restrictedSource = {
+    provider: 'alfa',
+    locator: 'leetcode',
+    ref: 'alfa-cache-v1',
+    provenance: {
+      state: 'RESTRICTED_METADATA_ONLY',
+      attribution: 'LeetCode'
+    }
+  };
+  const restrictedProblem = {
+    title: 'Restricted metadata',
+    difficulty: 'easy',
+    provenance: {
+      state: 'RESTRICTED_METADATA_ONLY',
+      attribution: 'LeetCode',
+      canonicalUrl: 'https://leetcode.com/problems/restricted-metadata/'
+    }
+  };
+
+  const result = await sync.sync([restrictedProblem], { source: restrictedSource });
+  assert.equal(result.inserted, 1);
+  assert.equal(
+    repository.state.get('restricted-metadata').problem.provenance.state,
+    'RESTRICTED_METADATA_ONLY'
+  );
+
+  await assert.rejects(
+    sync.sync([restrictedProblem], { source }),
+    /requires a restricted metadata-only source/
+  );
+  await assert.rejects(
+    sync.sync([{
+      ...restrictedProblem,
+      statement: 'A record that would otherwise be a licensed problem.',
+      visibleTests: [{ input: 'sample', expectedOutput: 'sample' }],
+      provenance: undefined
+    }], { source: restrictedSource }),
+    /requires restricted provenance/
+  );
+});

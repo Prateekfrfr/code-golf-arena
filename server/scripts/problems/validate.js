@@ -1,6 +1,7 @@
 import { problems } from '../../../data/problems.js';
 import { normalizeProblem } from '../../problems/problemSchema.js';
 import { detectProblemDuplicates } from '../../problemImport/duplicateDetector.js';
+import { logger } from '../../observability/logger.js';
 
 const normalized = problems.map(normalizeProblem);
 const { duplicates } = detectProblemDuplicates(normalized);
@@ -16,22 +17,16 @@ if (blocking.length > 0) {
   );
 }
 
-console.log(
-  JSON.stringify(
-    {
-      valid: true,
-      problems: normalized.length,
-      visibleTests: normalized.reduce(
-        (total, problem) => total + problem.visibleTests.length,
-        0
-      ),
-      hiddenTests: normalized.reduce(
-        (total, problem) => total + problem.hiddenTests.length,
-        0
-      ),
-      duplicateRecords: duplicates.length
-    },
-    null,
-    2
-  )
-);
+logger.info('problems.validation.completed', {
+  valid: true,
+  problems: normalized.length,
+  visibleTests: normalized.reduce(
+    (total, problem) => total + problem.visibleTests.length,
+    0
+  ),
+  hiddenTests: normalized.reduce(
+    (total, problem) => total + problem.hiddenTests.length,
+    0
+  ),
+  duplicateRecords: duplicates.length
+});

@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import {
+  canAuthorProblems,
+  useAuth,
+} from "@/components/auth/AuthProvider";
 
 type NavItem = {
   label: string;
@@ -30,6 +34,23 @@ export function PremiumShell({
   status?: ReactNode;
 }) {
   const pathname = usePathname();
+  const { user, loading } = useAuth();
+  const accountItems: NavItem[] = user
+    ? [
+        ...(canAuthorProblems(user)
+          ? [{ label: "Authoring", href: "/admin/problems", marker: "++" }]
+          : []),
+        { label: user.username, href: "/profile", marker: "@" },
+      ]
+    : loading
+      ? []
+      : [{ label: "Sign in", href: "/auth", marker: "->" }];
+  const renderedNavItems = [...navItems, ...accountItems].filter(
+    (item, index, items) =>
+      items.findIndex(
+        (candidate) => candidate.href === item.href && candidate.label === item.label,
+      ) === index,
+  );
 
   return (
     <div
@@ -45,7 +66,7 @@ export function PremiumShell({
         </Link>
 
         <nav className="sidebar-nav" aria-label="Primary navigation">
-          {navItems.map((item) => {
+          {renderedNavItems.map((item) => {
             const isActive =
               item.active ??
               (item.href === "/"

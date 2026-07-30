@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { DatabaseError, NotFoundError } from '../../errors/index.js';
+import { fingerprintProblem } from '../../problemImport/fingerprint.js';
+import { normalizeProblem } from '../../problems/problemSchema.js';
 
 /** @typedef {import('../types.js').Database} Database */
 /** @typedef {import('../types.js').Queryable} Queryable */
@@ -35,7 +37,7 @@ import { DatabaseError, NotFoundError } from '../../errors/index.js';
  * cacheVersion?: string | null,
  * problem: CanonicalProblem
  * }} StoredProblem */
-/** @typedef {{ search?: string, topic?: string, difficulty?: string, language?: string, tag?: string, solved?: string, userId?: string, limit?: number | string, cursor?: number | string }} ProblemListQuery */
+/** @typedef {{ search?: string, topic?: string, difficulty?: string, language?: string, tag?: string, solved?: string, userId?: string, status?: string, includeNonPublic?: boolean, includeDeleted?: boolean, limit?: number | string, cursor?: number | string }} ProblemListQuery */
 /** @typedef {{
  * slug: string,
  * problem: CanonicalProblem,
@@ -102,7 +104,12 @@ const mapProblemRows = (rows) => rows.map(asStoredProblem);
 
 /** @param {ProblemListQuery} [query] */
 const buildListQuery = (query = {}) => {
-  const clauses = ['p.archived_at IS NULL'];
+  const clauses = [
+    query.includeDeleted ? 'TRUE' : 'p.deleted_at IS NULL',
+    query.includeNonPublic
+      ? 'TRUE'
+      : "p.archived_at IS NULL AND p.status = 'published' AND p.visibility = 'public'"
+  ];
   /** @type {SqlValue[]} */
   const values = [];
   /** @param {string} sql @param {SqlValue | readonly SqlValue[]} entries */
@@ -128,6 +135,7 @@ const buildListQuery = (query = {}) => {
   const language = String(query.language || '').trim().toLowerCase();
   const tag = String(query.tag || '').trim().toLowerCase();
   const solved = String(query.solved || '').trim().toLowerCase();
+  const status = String(query.status || '').trim().toLowerCase();
   const userId = String(query.userId || '').trim().toLowerCase();
   if (search) {
     add('(p.title ILIKE ? OR p.statement ILIKE ? OR ? = ANY(p.tags))', [
@@ -140,6 +148,7 @@ const buildListQuery = (query = {}) => {
   if (difficulty) add('p.difficulty = ?', difficulty);
   if (language) add('? = ANY(p.supported_languages)', language);
   if (tag) add('? = ANY(p.tags)', tag);
+  if (status) add('p.status = ?', status);
   if (solved) {
     if ((solved !== 'solved' && solved !== 'unsolved') ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
@@ -174,8 +183,11 @@ export const createPostgresProblemRepository = ({ database }) => {
     });
   }
 
-  /** @param {string} slug @param {{includeArchived?: boolean}} [options] */
-  const getBySlug = async (slug, { includeArchived = false } = {}) => {
+  /** @param {string} slug @param {{includeArchived?: boolean, includeUnpublished?: boolean}} [options] */
+  const getBySlug = async (
+    slug,
+    { includeArchived = false, includeUnpublished = false } = {}
+  ) => {
     /** @type {import('../types.js').QueryResult<ProblemRow>} */
     const result = await database.query(
       `SELECT p.id, p.slug, p.current_fingerprint, p.current_version, p.source_key,
@@ -183,7 +195,10 @@ export const createPostgresProblemRepository = ({ database }) => {
               p.fetched_at, p.cache_version,
               p.current_problem AS problem
        FROM problems p
-       WHERE p.slug = $1 ${includeArchived ? '' : 'AND p.archived_at IS NULL'}`,
+       WHERE p.slug = $1
+         ${includeArchived ? '' : 'AND p.archived_at IS NULL'}
+         ${includeUnpublished ? '' : "AND p.status = 'published' AND p.visibility = 'public'"}
+         AND p.deleted_at IS NULL`,
       [String(slug || '').trim().toLowerCase()]
     );
     return result.rows[0] ? asStoredProblem(result.rows[0]) : null;
@@ -224,6 +239,192 @@ export const createPostgresProblemRepository = ({ database }) => {
     return result.items[Math.floor(Math.random() * result.items.length)];
   };
 
+  /** @param {unknown} value */
+  const requireUuid = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+      throw new DatabaseError('A valid author account is required.', {
+        code: 'DATABASE_PROBLEM_AUTHOR_INVALID',
+        expose: true
+      });
+    }
+    return normalized;
+  };
+
+  /** @param {Queryable} queryable @param {string} problemId @param {string[]} tags */
+  const replaceTagsWith = async (queryable, problemId, tags) => {
+    await queryable.query('DELETE FROM problem_tags WHERE problem_id = $1', [problemId]);
+    for (const tag of tags) {
+      const slug = String(tag).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      if (!slug) continue;
+      await queryable.query(
+        `INSERT INTO tags (id, slug, label)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (slug) DO UPDATE SET label = EXCLUDED.label`,
+        [crypto.randomUUID(), slug, String(tag).trim().slice(0, 80)]
+      );
+      await queryable.query(
+        `INSERT INTO problem_tags (problem_id, tag_id)
+         SELECT $1, id FROM tags WHERE slug = $2
+         ON CONFLICT DO NOTHING`,
+        [problemId, slug]
+      );
+    }
+  };
+
+  /** @param {unknown} input @param {string} authorId */
+  const saveAuthoredProblem = async (input, authorId) => {
+    const safeAuthorId = requireUuid(authorId);
+    const source = {
+      provider: 'local',
+      locator: 'admin-authoring',
+      revision: 'authored',
+      license: {
+        spdxId: 'CC0-1.0',
+        attribution: 'Code Golf Arena original problem'
+      }
+    };
+    return database.transaction(async (transaction) => {
+      const draft = normalizeProblem({
+        ...(input && typeof input === 'object' ? input : {}),
+        authorId: safeAuthorId
+      });
+      /** @type {import('../types.js').QueryResult<{id: string, current_version: number, current_problem: CanonicalProblem}>} */
+      const existing = await transaction.query(
+        `SELECT id, current_version, current_problem
+         FROM problems WHERE slug = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [draft.slug]
+      );
+      const current = existing.rows[0];
+      const now = new Date().toISOString();
+      const version = (current?.current_version || 0) + 1;
+      const problem = normalizeProblem({
+        ...draft,
+        version: String(version),
+        createdAt: current?.current_problem?.createdAt || draft.createdAt || now,
+        updatedAt: now
+      });
+      const fingerprint = fingerprintProblem(problem);
+      await saveVersionWith(transaction, {
+        slug: problem.slug,
+        problem,
+        fingerprint,
+        version,
+        sourceKey: 'local:admin-authoring',
+        source,
+        sourceData: {},
+        importedAt: now
+      });
+      const problemId = current?.id || (await transaction.query(
+        'SELECT id FROM problems WHERE slug = $1',
+        [problem.slug]
+      )).rows[0]?.id;
+      if (!problemId) {
+        throw new DatabaseError('Authored problem could not be reloaded.', {
+          code: 'DATABASE_PROBLEM_WRITE_FAILED'
+        });
+      }
+      await replaceTagsWith(transaction, String(problemId), problem.tags);
+      await transaction.query(
+        'DELETE FROM problem_drafts WHERE author_id = $1 AND slug = $2',
+        [safeAuthorId, problem.slug]
+      );
+      return problem;
+    });
+  };
+
+  /** @param {string} slug */
+  const getVersionHistory = async (slug) => {
+    /** @type {import('../types.js').QueryResult<{version: number, fingerprint: string, problem: CanonicalProblem, imported_at: string | Date, source: JsonObject}>} */
+    const result = await database.query(
+      `SELECT version.version, version.fingerprint, version.problem,
+              version.imported_at, version.source
+       FROM problem_versions AS version
+       JOIN problems AS problem ON problem.id = version.problem_id
+       WHERE problem.slug = $1 AND problem.deleted_at IS NULL
+       ORDER BY version.version DESC`,
+      [String(slug || '').trim().toLowerCase()]
+    );
+    return result.rows.map((row) => ({
+      version: row.version,
+      fingerprint: row.fingerprint,
+      problem: row.problem,
+      importedAt: new Date(row.imported_at).toISOString(),
+      source: row.source
+    }));
+  };
+
+  /** @param {string} slug */
+  const softDeleteProblem = async (slug) => {
+    const result = await database.query(
+      `UPDATE problems
+       SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE slug = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [String(slug || '').trim().toLowerCase()]
+    );
+    if (!result.rows[0]) {
+      throw new NotFoundError('Problem was not found.', {
+        code: 'DATABASE_PROBLEM_NOT_FOUND'
+      });
+    }
+  };
+
+  /** @param {unknown} input @param {string} authorId */
+  const saveDraft = async (input, authorId) => {
+    const safeAuthorId = requireUuid(authorId);
+    const problem = normalizeProblem({
+      ...(input && typeof input === 'object' ? input : {}),
+      authorId: safeAuthorId,
+      status: 'draft'
+    });
+    await database.query(
+      `INSERT INTO problem_drafts (id, problem_id, author_id, slug, draft)
+       VALUES (
+         $1,
+         (SELECT id FROM problems WHERE slug = $2 AND deleted_at IS NULL),
+         $3, $2, $4::JSONB
+       )
+       ON CONFLICT (author_id, slug) DO UPDATE SET
+         problem_id = EXCLUDED.problem_id,
+         draft = EXCLUDED.draft,
+         updated_at = CURRENT_TIMESTAMP`,
+      [crypto.randomUUID(), problem.slug, safeAuthorId, json(problem)]
+    );
+    return problem;
+  };
+
+  /** @param {string} slug @param {string} authorId */
+  const getDraft = async (slug, authorId) => {
+    const result = await database.query(
+      `SELECT draft, updated_at FROM problem_drafts
+       WHERE author_id = $1 AND slug = $2`,
+      [requireUuid(authorId), String(slug || '').trim().toLowerCase()]
+    );
+    return result.rows[0]
+      ? {
+          problem: result.rows[0].draft,
+          updatedAt: new Date(/** @type {string | Date} */ (result.rows[0].updated_at)).toISOString()
+        }
+      : null;
+  };
+
+  const listTags = async () => {
+    const result = await database.query(
+      `SELECT tag.slug, tag.label, count(problem_tag.problem_id)::INTEGER AS problem_count
+       FROM tags AS tag
+       LEFT JOIN problem_tags AS problem_tag ON problem_tag.tag_id = tag.id
+       GROUP BY tag.id, tag.slug, tag.label
+       ORDER BY tag.label ASC`
+    );
+    return result.rows.map((row) => ({
+      slug: String(row.slug),
+      label: String(row.label),
+      problemCount: Number(row.problem_count)
+    }));
+  };
+
   /** @param {string} sourceKey */
   const listSlugsBySource = async (sourceKey) => {
     /** @type {import('../types.js').QueryResult<{slug: string}>} */
@@ -249,7 +450,7 @@ export const createPostgresProblemRepository = ({ database }) => {
     ]);
     const id = existing.rows[0]?.id || crypto.randomUUID();
     const provenance = problem.provenance;
-    const sourceData = objectOrEmpty(problem.metadata.alfa);
+    const sourceData = objectOrEmpty(problem.metadata.sourceData);
     const provenanceState = provenance.state === 'RESTRICTED_METADATA_ONLY'
       ? 'RESTRICTED_METADATA_ONLY'
       : 'LICENSED';
@@ -268,10 +469,13 @@ export const createPostgresProblemRepository = ({ database }) => {
           id, slug, title, statement, difficulty, topic, tags, supported_languages,
           current_version, current_fingerprint, current_problem, source_key,
           provenance_state, canonical_url, attribution, source_data, fetched_at,
-          cache_version, archived_at, updated_at
+          cache_version, author_id, status, visibility, archived_at, deleted_at,
+          updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7::TEXT[], $8::TEXT[], $9, $10, $11::JSONB, $12,
-          $13, $14, $15, $16::JSONB, $17::TIMESTAMPTZ, $18, NULL, CURRENT_TIMESTAMP
+          $13, $14, $15, $16::JSONB, $17::TIMESTAMPTZ, $18, $19::UUID, $20, $21,
+          CASE WHEN $20 = 'archived' THEN CURRENT_TIMESTAMP ELSE NULL END,
+          NULL, CURRENT_TIMESTAMP
         )
         ON CONFLICT (slug) DO UPDATE SET
           title = EXCLUDED.title,
@@ -290,7 +494,11 @@ export const createPostgresProblemRepository = ({ database }) => {
           source_data = EXCLUDED.source_data,
           fetched_at = EXCLUDED.fetched_at,
           cache_version = EXCLUDED.cache_version,
-          archived_at = NULL,
+          author_id = COALESCE(EXCLUDED.author_id, problems.author_id),
+          status = EXCLUDED.status,
+          visibility = EXCLUDED.visibility,
+          archived_at = EXCLUDED.archived_at,
+          deleted_at = NULL,
           updated_at = CURRENT_TIMESTAMP`,
       [
         id,
@@ -310,7 +518,10 @@ export const createPostgresProblemRepository = ({ database }) => {
         attribution,
         json(sourceData),
         fetchedAt,
-        cacheVersion
+        cacheVersion,
+        problem.authorId,
+        problem.status,
+        problem.visibility
       ]
     );
     await queryable.query(
@@ -346,6 +557,12 @@ export const createPostgresProblemRepository = ({ database }) => {
     getBySlug,
     listProblems,
     getRandomProblem,
+    saveAuthoredProblem,
+    getVersionHistory,
+    softDeleteProblem,
+    saveDraft,
+    getDraft,
+    listTags,
     listSlugsBySource,
     /** @param {ProblemVersionWrite} value */
     saveVersion(value) {

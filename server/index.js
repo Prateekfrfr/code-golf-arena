@@ -38,8 +38,6 @@ import {
 } from './auth/httpCookies.js';
 import { judgeSubmission } from './judge.js';
 import {
-  createAlfaClient,
-  createAlfaProblemProvider,
   createDatabaseProblemProvider,
   createProblemProvider
 } from './problemProviders/index.js';
@@ -67,7 +65,7 @@ import {
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '16kb', strict: true }));
+app.use(express.json({ limit: '512kb', strict: true }));
 app.use((request, response, next) => {
   const correlationId = createCorrelationId();
   request.correlationId = correlationId;
@@ -82,7 +80,7 @@ app.use(
         isAllowedOrigin(origin)
       );
     },
-    methods: ['GET', 'POST', 'PATCH'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true
   })
 );
@@ -183,21 +181,6 @@ const submissionRepository = database
 const problemProvider = postgresProblemRepository
   ? createDatabaseProblemProvider({ repository: postgresProblemRepository })
   : createProblemProvider();
-const alfaProblemProvider = database && serverConfig.alfa.apiUrl
-  ? createAlfaProblemProvider({
-      client: createAlfaClient({
-        baseUrl: serverConfig.alfa.apiUrl,
-        timeoutMs: serverConfig.alfa.timeoutMs,
-        concurrency: serverConfig.alfa.syncConcurrency,
-        retry: { maxRetries: serverConfig.alfa.maxRetries }
-      }),
-      repository: postgresProblemRepository,
-      sourceLocator: serverConfig.alfa.apiUrl,
-      cacheTtlDays: serverConfig.alfa.cacheTtlDays,
-      cacheVersion: serverConfig.alfa.cacheVersion,
-      storeFullContent: serverConfig.alfa.storeFullContent
-    })
-  : null;
 const executionQueue = createExecutionQueue({
   concurrency: serverConfig.executionConcurrency
 });
@@ -208,6 +191,11 @@ const socketRateLimiter = redisBoundary
       onError: (error) => logger.error('redis.rate_limit.failed', { error })
     })
   : createSocketRateLimiter();
+const authRateLimiter = createSocketRateLimiter({
+  rules: {
+    authentication: { limit: 10, windowMs: 15 * 60_000 }
+  }
+});
 const compressionAnalyzers = createDefaultCompressionAnalyzerRegistry();
 const antiCheatRuleEngine = createDefaultAntiCheatRuleEngine();
 const allowedAntiCheatTypes = new Set([
@@ -396,6 +384,10 @@ const buildAntiCheatSummary = (room) => ({
 });
 
 const handleCreateRoom = async (socket, options = {}) => {
+  if (!getAccountId(socket)) {
+    emitRoomError(socket, 'Sign in to create a competitive room.');
+    return;
+  }
   if (!(await consumeRateLimit(socket, 'roomMutation'))) return;
 
   const roomCode = await createRoomCode();
@@ -438,6 +430,10 @@ const handleStartSolo = async (socket, options = {}) => {
 };
 
 const handleJoinRoom = async (socket, roomCodeInput) => {
+  if (!getAccountId(socket)) {
+    emitRoomError(socket, 'Sign in to join a competitive room.');
+    return;
+  }
   if (!(await consumeRateLimit(socket, 'roomMutation'))) return;
 
   const { roomCode, room } = await getRoomOrError(socket, roomCodeInput, {
@@ -507,6 +503,15 @@ const handleSubmitCode = async (socket, payload) => {
 
   const playerId = getPlayerId(socket);
   const accountId = getAccountId(socket);
+  if (!accountId) {
+    socket.emit(SocketEvents.SUBMISSION_RESULT, {
+      output: 'Sign in to submit code. Your editor remains available in guest mode.',
+      characterCount: [...submission.code].length,
+      characterBytes: Buffer.byteLength(submission.code, 'utf8'),
+      success: false
+    });
+    return;
+  }
   const antiCheatSession = getAntiCheatSession(roomCode, room, playerId);
   // A session may be created before an invalid/no-problem return. Persist it
   // immediately so that a subsequent request handled by another process sees
@@ -583,6 +588,7 @@ const handleSubmitCode = async (socket, payload) => {
     userId: accountId || playerId,
     ...(accountId ? { accountId } : {}),
     problemId: room.problem.slug,
+    problemVersion: Number(room.problem.version || 1),
     sourceCode: submission.code,
     language: submission.language,
     success: judgeResult.success,
@@ -839,13 +845,13 @@ const requireAuthenticatedUser = (request, response, next) => {
   next();
 };
 
-const requireAdministrator = (request, response, next) => {
+const requireProblemAuthor = (request, response, next) => {
   if (!request.authUser) {
     response.status(401).json({ error: 'Authentication is required.' });
     return;
   }
-  if (request.authUser.role !== 'admin') {
-    response.status(403).json({ error: 'Administrator access is required.' });
+  if (!['problem_setter', 'moderator', 'admin'].includes(request.authUser.role)) {
+    response.status(403).json({ error: 'Problem setter access is required.' });
     return;
   }
   next();
@@ -860,7 +866,19 @@ const setSessionCookie = (response, sessionSecret, expiresAt) => {
   }));
 };
 
-app.post('/api/auth/register', requirePersistentAccounts, async (request, response, next) => {
+const limitAuthentication = async (request, response, next) => {
+  const result = await authRateLimiter.consume(request.ip || 'unknown', 'authentication');
+  if (!result.allowed) {
+    response
+      .status(429)
+      .set('Retry-After', String(Math.ceil(result.retryAfterMs / 1_000)))
+      .json({ error: 'Too many authentication attempts. Try again later.' });
+    return;
+  }
+  next();
+};
+
+app.post('/api/auth/register', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
   try {
     const session = await authService.register(request.body);
     setSessionCookie(response, session.sessionSecret, session.expiresAt);
@@ -870,7 +888,7 @@ app.post('/api/auth/register', requirePersistentAccounts, async (request, respon
   }
 });
 
-app.post('/api/auth/login', requirePersistentAccounts, async (request, response, next) => {
+app.post('/api/auth/login', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
   try {
     const session = await authService.login(request.body);
     setSessionCookie(response, session.sessionSecret, session.expiresAt);
@@ -900,6 +918,21 @@ app.post('/api/auth/logout', requirePersistentAccounts, async (request, response
       secure: process.env.NODE_ENV === 'production'
     }));
     response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/refresh', requirePersistentAccounts, requireAuthenticatedUser, async (request, response, next) => {
+  try {
+    const sessionSecret = readSessionCookie(
+      request.get('cookie'),
+      serverConfig.auth.sessionCookieName
+    );
+    if (!sessionSecret) throw new AuthenticationError();
+    const session = await authService.refresh(sessionSecret);
+    setSessionCookie(response, session.sessionSecret, session.expiresAt);
+    response.json({ user: session.user });
   } catch (error) {
     next(error);
   }
@@ -987,7 +1020,12 @@ const problemQueryForRequest = (request) => {
 app.get('/api/problems', async (request, response, next) => {
   try {
     const result = await problemProvider.listProblems(problemQueryForRequest(request));
-    response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    response.set(
+      'Cache-Control',
+      request.query.solved
+        ? 'private, max-age=0'
+        : 'public, max-age=30, stale-while-revalidate=120'
+    );
     response.json(result);
   } catch (error) {
     next(error);
@@ -997,7 +1035,12 @@ app.get('/api/problems', async (request, response, next) => {
 app.get('/api/problems/search', async (request, response, next) => {
   try {
     const result = await problemProvider.listProblems(problemQueryForRequest(request));
-    response.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    response.set(
+      'Cache-Control',
+      request.query.solved
+        ? 'private, max-age=0'
+        : 'public, max-age=30, stale-while-revalidate=120'
+    );
     response.json(result);
   } catch (error) {
     next(error);
@@ -1007,9 +1050,7 @@ app.get('/api/problems/search', async (request, response, next) => {
 app.get('/api/problems/:slug', async (request, response, next) => {
   try {
     const slug = String(request.params.slug || '').trim().toLowerCase();
-    const problem = alfaProblemProvider
-      ? await alfaProblemProvider.getBySlug(slug)
-      : await problemProvider.getBySlug(slug);
+    const problem = await problemProvider.getBySlug(slug);
     if (!problem) {
       response.status(404).json({ error: 'Problem not found.' });
       return;
@@ -1021,48 +1062,162 @@ app.get('/api/problems/:slug', async (request, response, next) => {
   }
 });
 
-const requireAlfaAdmin = (request, response, next) => {
-  if (!alfaProblemProvider || !serverConfig.alfa.syncEnabled) {
-    response.status(403).json({ error: 'Admin problem sync is unavailable.' });
+const requireProblemAuthoring = (request, response, next) => {
+  if (!postgresProblemRepository) {
+    response.status(503).json({ error: 'Problem authoring requires PostgreSQL persistence.' });
     return;
   }
-  requireAdministrator(request, response, next);
+  requireProblemAuthor(request, response, next);
 };
 
-app.post('/api/admin/problems/sync/:slug', requireAlfaAdmin, async (request, response, next) => {
+const managedProblem = async (slug) =>
+  postgresProblemRepository.getBySlug(slug, {
+    includeArchived: true,
+    includeUnpublished: true
+  });
+
+app.get('/api/admin/problems', requireProblemAuthoring, async (request, response, next) => {
   try {
-    const problem = await alfaProblemProvider.syncSlug(String(request.params.slug || ''));
-    logger.info('alfa.sync.completed', {
-      correlationId: request.correlationId,
-      slug: problem.slug,
-      mode: 'single'
+    const result = await postgresProblemRepository.listProblems({
+      search: request.query.search,
+      difficulty: request.query.difficulty,
+      topic: request.query.topic,
+      status: request.query.status,
+      cursor: request.query.cursor,
+      limit: request.query.limit,
+      includeNonPublic: true
     });
-    response.status(201).json(problem);
+    response.json({
+      ...result,
+      items: result.items.map((entry) => entry.problem)
+    });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/admin/problems/sync', requireAlfaAdmin, async (request, response, next) => {
+app.get('/api/admin/problems/tags', requireProblemAuthoring, async (_request, response, next) => {
   try {
-    const body = request.body && typeof request.body === 'object' ? request.body : {};
-    const tags = Array.isArray(body.tags)
-      ? body.tags
-      : typeof body.tags === 'string'
-        ? body.tags.split(',')
-        : undefined;
-    const result = await alfaProblemProvider.syncList({
-      difficulty: body.difficulty,
-      tags,
-      limit: body.limit ?? serverConfig.alfa.batchSize,
-      cursor: body.cursor
+    response.json({ items: await postgresProblemRepository.listTags() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/problems/:slug', requireProblemAuthoring, async (request, response, next) => {
+  try {
+    const stored = await managedProblem(request.params.slug);
+    if (!stored) {
+      response.status(404).json({ error: 'Problem not found.' });
+      return;
+    }
+    response.json({
+      problem: stored.problem,
+      versions: await postgresProblemRepository.getVersionHistory(stored.slug),
+      draft: await postgresProblemRepository.getDraft(stored.slug, request.authUser.id)
     });
-    logger.info('alfa.sync.completed', {
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/problems', requireProblemAuthoring, async (request, response, next) => {
+  try {
+    const problem = await postgresProblemRepository.saveAuthoredProblem(
+      request.body,
+      request.authUser.id
+    );
+    logger.info('problem.authoring.created', {
       correlationId: request.correlationId,
-      mode: 'bulk',
-      count: result.items.length
+      userId: request.authUser.id,
+      slug: problem.slug
     });
-    response.status(201).json(result);
+    response.status(201).json({ problem });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/admin/problems/:slug', requireProblemAuthoring, async (request, response, next) => {
+  try {
+    const slug = String(request.params.slug || '').trim().toLowerCase();
+    const stored = await managedProblem(slug);
+    if (!stored) {
+      response.status(404).json({ error: 'Problem not found.' });
+      return;
+    }
+    const problem = await postgresProblemRepository.saveAuthoredProblem(
+      { ...request.body, slug },
+      request.authUser.id
+    );
+    logger.info('problem.authoring.updated', {
+      correlationId: request.correlationId,
+      userId: request.authUser.id,
+      slug,
+      version: problem.version
+    });
+    response.json({ problem });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const changeProblemStatus = (status) =>
+  async (request, response, next) => {
+    try {
+      const stored = await managedProblem(request.params.slug);
+      if (!stored) {
+        response.status(404).json({ error: 'Problem not found.' });
+        return;
+      }
+      const problem = await postgresProblemRepository.saveAuthoredProblem(
+        {
+          ...stored.problem,
+          status,
+          visibility: status === 'published'
+            ? (request.body?.visibility || stored.problem.visibility || 'public')
+            : stored.problem.visibility
+        },
+        request.authUser.id
+      );
+      response.json({ problem });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+app.post(
+  '/api/admin/problems/:slug/publish',
+  requireProblemAuthoring,
+  changeProblemStatus('published')
+);
+app.post(
+  '/api/admin/problems/:slug/archive',
+  requireProblemAuthoring,
+  changeProblemStatus('archived')
+);
+
+app.put('/api/admin/problems/:slug/draft', requireProblemAuthoring, async (request, response, next) => {
+  try {
+    const problem = await postgresProblemRepository.saveDraft(
+      { ...request.body, slug: String(request.params.slug || '').trim().toLowerCase() },
+      request.authUser.id
+    );
+    response.json({ problem, savedAt: new Date().toISOString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/admin/problems/:slug', requireProblemAuthoring, async (request, response, next) => {
+  try {
+    await postgresProblemRepository.softDeleteProblem(request.params.slug);
+    logger.info('problem.authoring.deleted', {
+      correlationId: request.correlationId,
+      userId: request.authUser.id,
+      slug: String(request.params.slug || '').trim().toLowerCase()
+    });
+    response.status(204).end();
   } catch (error) {
     next(error);
   }

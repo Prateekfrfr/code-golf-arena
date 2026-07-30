@@ -2,8 +2,11 @@
  * @typedef {object} AuthUser
  * @property {string} id
  * @property {string} email
+ * @property {string} username
  * @property {string} displayName
- * @property {'user' | 'admin'} [role]
+ * @property {string | null} [avatar]
+ * @property {'credentials'} [provider]
+ * @property {'user' | 'problem_setter' | 'moderator' | 'admin'} [role]
  * @property {Date | string} [createdAt]
  */
 
@@ -19,7 +22,7 @@
  * @typedef {object} AuthRepository
  * @property {<T>(work: (repository: AuthRepository) => Promise<T>) => Promise<T>} transaction
  * @property {(email: string) => Promise<StoredAuthUser | null>} findUserByEmail
- * @property {(input: { email: string, passwordHash: string, displayName: string, role?: 'user' | 'admin' }) => Promise<AuthUser>} createRegisteredUser
+ * @property {(input: { email: string, passwordHash: string, displayName: string, role?: 'user' | 'problem_setter' | 'moderator' | 'admin' }) => Promise<AuthUser>} createRegisteredUser
  * @property {(input: { userId: string, secretDigest: string, expiresAt: Date }) => Promise<void>} createSession
  * @property {(secretDigest: string) => Promise<AuthUser | null>} getSessionUser
  * @property {(secretDigest: string) => Promise<void>} revokeSession

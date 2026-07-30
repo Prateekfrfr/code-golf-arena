@@ -1,5 +1,6 @@
 export type Language = "python" | "javascript" | "cpp" | "java";
 export type RoomMode = "multiplayer" | "solo";
+export type AccountRole = "user" | "problem_setter" | "moderator" | "admin";
 export type ProblemTopic =
   | "arrays"
   | "strings"
@@ -23,23 +24,47 @@ export interface Problem {
   topic: ProblemTopic;
   statement: string;
   description: string;
+  inputFormat?: string;
+  outputFormat?: string;
   explanation?: string;
+  notes?: string;
+  hints?: string[];
+  editorial?: string;
   examples?: Array<{
     input: unknown;
     output: unknown;
     explanation?: string;
   }>;
   constraints?: string[];
-  difficulty: "easy" | "medium" | "hard";
+  difficulty: "easy" | "medium" | "hard" | "very-hard";
   tags?: string[];
   starterCode?: Partial<Record<Language, string>>;
   supportedLanguages?: Language[];
   visibleTests?: TestCase[];
+  hiddenTests?: TestCase[];
   testCases?: TestCase[];
   edgeCases?: string[];
   timeLimitMs?: number;
   memoryLimitMb?: number;
+  maxSourceSizeBytes?: number;
+  estimatedSolveTimeMinutes?: number;
+  visibility?: "public" | "private" | "unlisted";
+  status?: "draft" | "published" | "archived";
+  authorId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
   version?: string;
+}
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  avatar: string | null;
+  provider: "credentials";
+  role: AccountRole;
+  createdAt?: number;
 }
 
 export interface ScoreBreakdownComponent {

@@ -147,12 +147,15 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
     async query(text, values = []) {
       calls.push({ text, values });
       if (text.includes('password_hash') && text.startsWith('SELECT')) return { rows: [] };
-      if (text.startsWith('INSERT INTO users')) {
+      if (text.includes('INSERT INTO users')) {
         return {
           rows: [{
             id: ids.account,
             email: 'member@example.com',
+            username: 'member-one',
             display_name: 'Member One',
+            avatar_url: null,
+            provider: 'credentials',
             role: 'user',
             created_at: '2026-01-01T00:00:00.000Z',
             registered_at: '2026-01-01T00:00:00.000Z'
@@ -167,7 +170,10 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
             id: ids.session,
             user_id: ids.account,
             email: 'member@example.com',
+            username: 'member-one',
             display_name: 'Member One',
+            avatar_url: null,
+            provider: 'credentials',
             role: 'user',
             expires_at: '2099-01-01T00:00:00.000Z',
             created_at: '2026-01-01T00:00:00.000Z',
@@ -201,6 +207,7 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
 
   assert.equal(transactions, 1);
   assert.equal(registered.user.displayName, 'Member One');
+  assert.equal(registered.user.username, 'member-one');
   assert.equal(registered.user.passwordHash, undefined);
   assert.equal(calls.some((call) => call.text.startsWith('INSERT INTO auth_sessions')), true);
   assert.equal(calls[1].values[3], 'Member One');

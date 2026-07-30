@@ -150,12 +150,12 @@ test('restricted metadata-only provenance is explicit and never treated as a per
   const repository = createRepository();
   const sync = createProblemSync({ repository });
   const restrictedSource = {
-    provider: 'alfa',
-    locator: 'leetcode',
-    ref: 'alfa-cache-v1',
+    provider: 'legacy-catalog',
+    locator: 'reviewed-archive',
+    ref: 'legacy-cache-v1',
     provenance: {
       state: 'RESTRICTED_METADATA_ONLY',
-      attribution: 'LeetCode'
+      attribution: 'Example Archive'
     }
   };
   const restrictedProblem = {
@@ -163,8 +163,8 @@ test('restricted metadata-only provenance is explicit and never treated as a per
     difficulty: 'easy',
     provenance: {
       state: 'RESTRICTED_METADATA_ONLY',
-      attribution: 'LeetCode',
-      canonicalUrl: 'https://leetcode.com/problems/restricted-metadata/'
+      attribution: 'Example Archive',
+      canonicalUrl: 'https://example.com/problems/restricted-metadata/'
     }
   };
 

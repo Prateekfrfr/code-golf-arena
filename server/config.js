@@ -50,20 +50,6 @@ if (ephemeralStateMode === 'redis' && !redisUrl) {
   throw new Error('REDIS_URL is required when EPHEMERAL_STATE_MODE is redis.');
 }
 
-/** @param {string} name @param {boolean} fallback */
-const readBoolean = (name, fallback) => {
-  const raw = String(process.env[name] ?? '').trim().toLowerCase();
-  if (!raw) return fallback;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new Error(`${name} must be true or false.`);
-};
-
-const alfaStoreFullContent = readBoolean('ALFA_STORE_FULL_CONTENT', false);
-if (process.env.NODE_ENV === 'production' && alfaStoreFullContent) {
-  throw new Error('ALFA_STORE_FULL_CONTENT is allowed only for local development.');
-}
-
 /** @returns {string[]} */
 const readOrigins = () => {
   const configured = String(process.env.CORS_ORIGINS || '')
@@ -106,23 +92,6 @@ export const serverConfig = Object.freeze({
     min: 1024,
     max: 1024 * 1024
   }),
-  alfa: Object.freeze({
-    apiUrl: readString('ALFA_API_URL', '', { max: 2_000 }),
-    timeoutMs: readInteger('ALFA_API_TIMEOUT_MS', 5_000, {
-      min: 500,
-      max: 60_000
-    }),
-    cacheTtlDays: readInteger('ALFA_CACHE_TTL_DAYS', 7, { min: 1, max: 365 }),
-    cacheVersion: readString('ALFA_CACHE_VERSION', '1', { max: 80 }),
-    storeFullContent: alfaStoreFullContent,
-    syncEnabled: readBoolean('PROBLEM_SYNC_ENABLED', false),
-    batchSize: readInteger('PROBLEM_SYNC_BATCH_SIZE', 25, { min: 1, max: 100 }),
-    syncConcurrency: readInteger('PROBLEM_SYNC_CONCURRENCY', 3, {
-      min: 1,
-      max: 10
-    }),
-    maxRetries: readInteger('PROBLEM_SYNC_MAX_RETRIES', 3, { min: 0, max: 8 })
-  }),
   persistenceMode,
   ephemeralStateMode,
   redis: Object.freeze({
@@ -163,16 +132,6 @@ export const serverConfig = Object.freeze({
     connectionTimeoutMs: readInteger('DATABASE_CONNECTION_TIMEOUT_MS', 5_000, {
       min: 1_000,
       max: 60_000
-    }),
-    seedFilesystemDir: readString('PROBLEM_SEED_FILESYSTEM_DIR', '', {
-      max: 500
-    }),
-    seedSource: Object.freeze({
-      revision: readString('PROBLEM_SEED_SOURCE_REVISION', '', { max: 200 }),
-      spdxId: readString('PROBLEM_SEED_SOURCE_LICENSE', '', { max: 80 }),
-      attribution: readString('PROBLEM_SEED_SOURCE_ATTRIBUTION', '', {
-        max: 1_000
-      })
     })
   })
 });

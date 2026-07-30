@@ -18,11 +18,15 @@ submit to an isolated judge, compare deterministic scores, and replay the round.
 - Pluggable compression analyzers with safe golfing suggestions per language
 - Extensible anti-cheat rules for focus duration, paste/drop attempts, and
   submission rate, including warning, final-warning, and invalidation states
-- Provider-backed problem discovery with search, filters, and pagination
+- Local authored-problem discovery with search, filters, and pagination
 - Public/judge problem projections that never expose hidden tests
-- Filesystem, GitHub, database, and local problem-provider adapters
-- Validated import planning with fingerprints, duplicate detection, immutable
-  versions, dry runs, archival, and SPDX license policy
+- Filesystem, database, and bundled local problem-provider adapters
+- Problem setter dashboard with create, edit, preview, publish, archive,
+  soft-delete, autosave, tag management, and immutable version history
+- First-party local accounts with secure password hashing, opaque session
+  cookies, profile management, session rotation, and prepared future roles
+- Validated local import planning with fingerprints, duplicate detection,
+  immutable versions, dry runs, archival, and SPDX license policy
 - Responsive, accessible dark product UI with skeleton, error, and empty states
 
 ## Architecture
@@ -32,7 +36,7 @@ app/                         Next.js App Router product surfaces
 components/                  Shared application shell and UI primitives
 hooks/                       Socket connection and transient-state hooks
 lib/socket.js                Reconnect-safe Socket.IO client
-data/problems.js             Small bundled development catalog
+data/problems.js             61-problem original catalog
 server/index.js              Socket and HTTP boundaries
 server/executor.js           Hardened Docker execution adapter
 server/judge.js              Structured multi-test judge
@@ -40,7 +44,7 @@ server/scoring/              Versioned deterministic score engine
 server/analytics/            Submission analytics builder
 server/compression/          Pluggable language analyzers
 server/antiCheat/            Rule engine and session state
-server/problemProviders/     Local, filesystem, GitHub, and DB adapters
+server/problemProviders/     Local, filesystem, and DB adapters
 server/problemImport/        Validation, dedupe, versioning, and sync planning
 server/problems/             Canonical schema, catalog, public projections
 server/repositories/         Current in-memory room/replay/score/submission state
@@ -96,11 +100,8 @@ npm run db:migrate
 npm run db:seed
 ```
 
-`db:seed` imports the bundled development catalog and, when configured,
-bounded JSON files from `PROBLEM_SEED_FILESYSTEM_DIR`. It refuses to run until
-the `PROBLEM_SEED_SOURCE_*` values identify an approved license, attribution,
-and immutable source revision. Do not invent this provenance; set it to the
-actual redistribution terms for the data being seeded.
+`db:seed` imports the bundled 61-problem original catalog. It performs no
+network requests and requires no third-party dataset credentials.
 
 To exercise reversible migrations against an empty disposable database:
 
@@ -111,18 +112,6 @@ npm run db:migrate:verify
 The migration check applies all migrations, rolls them back, then applies them
 again. It is intentionally an operator/CI integration check because it needs a
 real `DATABASE_URL`.
-
-## Alfa metadata ingestion
-
-Alfa is an optional, self-hosted upstream adapter. It is disabled until both
-`ALFA_API_URL` and `PROBLEM_SYNC_ENABLED=true` are configured. Its cache lives
-in PostgreSQL and the admin sync routes require an authenticated administrator.
-
-Every Alfa record is stored as `RESTRICTED_METADATA_ONLY`: public responses
-contain attribution and the canonical LeetCode link, never a statement, HTML,
-tests, or a judge bundle. `ALFA_STORE_FULL_CONTENT=false` is the safe default;
-setting it to `true` is documented for local development only and does not make
-the record public or judgeable.
 
 ## Accounts and durable progress
 
@@ -140,8 +129,9 @@ authenticated progress is at `/api/progress`, and `solved=solved|unsolved`
 extends the existing `/api/problems` filters for an authenticated account.
 
 Set `AUTH_BOOTSTRAP_ADMIN_EMAIL` only during initial setup if the first
-matching registered account should administer problem sync. Clear it after the
-administrator has registered. See [account security and setup](docs/AUTHENTICATION.md).
+matching registered account should administer problem authoring. Clear it after the
+administrator has registered. Usernames are generated automatically and add
+numeric suffixes on collisions. See [authentication setup](AUTH_SETUP.md).
 
 ## Scoring
 
@@ -158,14 +148,14 @@ through `createScoreConfig` without changing the ranking service.
 
 ## Problem providers and imports
 
-The bundled catalog contains 15 development problems. It intentionally does not
-bundle a scraped or license-unclear 200+ problem dataset.
+The bundled catalog contains 61 original educational problems with separate
+examples, public tests, hidden tests, limits, tags, hints, and authoring
+metadata. It intentionally does not connect to remote problem APIs.
 
 Provider interfaces support:
 
 - local in-process records
 - bounded JSON files under an approved filesystem root
-- allowlisted GitHub owners at a pinned full commit SHA
 - an injected database repository
 
 Import infrastructure validates the canonical schema, normalizes records,
@@ -202,7 +192,7 @@ Redis lifecycle phase. A production deployment should next use:
   durable entities above
 - a dedicated execution worker/queue separated from the public Socket.IO
   process
-- authenticated user sessions in place of the current random guest identity
+- broader account recovery and verification flows around the local session system
 
 The room lifecycle repository already has an asynchronous contract for create,
 lookup, membership, connection, cleanup, and deletion. Its current in-memory

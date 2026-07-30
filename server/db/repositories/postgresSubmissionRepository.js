@@ -28,6 +28,7 @@ import { DatabaseError } from '../../errors/index.js';
  * playerId: string,
  * userId: string,
  * problemId: string,
+ * problemVersion?: number,
  * language: string,
  * success: boolean,
  * status: string,
@@ -48,6 +49,7 @@ import { DatabaseError } from '../../errors/index.js';
  * userId?: string,
  * accountId?: string,
  * problemId: string,
+ * problemVersion?: number,
  * language: string,
  * status: string,
  * sourceCode: string,
@@ -145,9 +147,9 @@ export const createPostgresSubmissionRepository = ({ database }) => {
             expose: true
           });
         }
-        /** @type {import('../types.js').QueryResult<{id: string, slug: string}>} */
+        /** @type {import('../types.js').QueryResult<{id: string, slug: string, current_version: number}>} */
         const problemResult = await transaction.query(
-          'SELECT id, slug FROM problems WHERE slug = $1 AND archived_at IS NULL',
+          'SELECT id, slug, current_version FROM problems WHERE slug = $1 AND archived_at IS NULL',
           [record.problemId]
         );
         if (!problemResult.rows[0]) {
@@ -160,17 +162,18 @@ export const createPostgresSubmissionRepository = ({ database }) => {
         const problem = problemResult.rows[0];
         await transaction.query(
           `INSERT INTO submissions (
-            id, room_code, user_id, problem_id, language, status, source_code,
+            id, room_code, user_id, problem_id, problem_version, language, status, source_code,
             character_count, character_bytes, code_point_count, runtime_ms,
             memory_bytes, compression, compression_score, submitted_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::JSONB, $14, $15::TIMESTAMPTZ
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::JSONB, $15, $16::TIMESTAMPTZ
           )`,
           [
             id,
             roomCode,
             user.id,
             problem.id,
+            Number(record.problemVersion || problem.current_version),
             record.language,
             record.status,
             record.sourceCode,

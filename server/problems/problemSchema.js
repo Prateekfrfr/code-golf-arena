@@ -13,7 +13,12 @@ import { ValidationError } from '../errors/index.js';
  *   slug: string,
  *   statement: string,
  *   description: string,
+ *   inputFormat: string,
+ *   outputFormat: string,
  *   explanation: string,
+ *   notes: string,
+ *   hints: string[],
+ *   editorial: string,
  *   examples: NormalizedExample[],
  *   constraints: string[],
  *   difficulty: string,
@@ -26,12 +31,21 @@ import { ValidationError } from '../errors/index.js';
  *   edgeCases: string[],
  *   timeLimitMs: number,
  *   memoryLimitMb: number,
+ *   maxSourceSizeBytes: number,
+ *   estimatedSolveTimeMinutes: number,
+ *   visibility: 'public' | 'private' | 'unlisted',
+ *   status: 'draft' | 'published' | 'archived',
+ *   authorId: string | null,
+ *   createdAt: string | null,
+ *   updatedAt: string | null,
  *   metadata: JsonObject,
  *   provenance: ProblemProvenance,
  *   version: string
  * }} NormalizedProblem */
 
-const DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
+const DIFFICULTIES = new Set(['easy', 'medium', 'hard', 'very-hard']);
+const VISIBILITIES = new Set(['public', 'private', 'unlisted']);
+const STATUSES = new Set(['draft', 'published', 'archived']);
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LANGUAGE_PATTERN = /^[a-z][a-z0-9_+-]{0,31}$/;
 const DEFAULT_SUPPORTED_LANGUAGES = Object.freeze([
@@ -45,7 +59,11 @@ export const PROBLEM_LIMITS = Object.freeze({
   title: 200,
   slug: 160,
   statement: 50_000,
+  format: 20_000,
   explanation: 50_000,
+  notes: 20_000,
+  hints: 20,
+  editorial: 100_000,
   examples: 20,
   constraints: 100,
   tags: 30,
@@ -56,7 +74,9 @@ export const PROBLEM_LIMITS = Object.freeze({
   edgeCases: 100,
   metadataBytes: 50_000,
   timeLimitMs: 30_000,
-  memoryLimitMb: 1_024
+  memoryLimitMb: 1_024,
+  maxSourceSizeBytes: 1_048_576,
+  estimatedSolveTimeMinutes: 480
 });
 
 const ALLOWED_KEYS = new Set([
@@ -65,7 +85,12 @@ const ALLOWED_KEYS = new Set([
   'slug',
   'statement',
   'description',
+  'inputFormat',
+  'outputFormat',
   'explanation',
+  'notes',
+  'hints',
+  'editorial',
   'examples',
   'constraints',
   'difficulty',
@@ -81,6 +106,14 @@ const ALLOWED_KEYS = new Set([
   'timeLimitMs',
   'memoryLimit',
   'memoryLimitMb',
+  'maxSourceSize',
+  'maxSourceSizeBytes',
+  'estimatedSolveTimeMinutes',
+  'visibility',
+  'status',
+  'authorId',
+  'createdAt',
+  'updatedAt',
   'metadata',
   'provenance',
   'version'
@@ -497,7 +530,26 @@ export const normalizeProblem = (input) => {
     max: 20
   }).toLowerCase();
   if (difficulty && !DIFFICULTIES.has(difficulty)) {
-    issues.push('difficulty must be easy, medium, or hard');
+    issues.push('difficulty must be easy, medium, hard, or very-hard');
+  }
+
+  const visibility = boundedString(
+    source.visibility,
+    'visibility',
+    issues,
+    { defaultValue: 'public', max: 16 }
+  ).toLowerCase();
+  if (!VISIBILITIES.has(visibility)) {
+    issues.push('visibility must be public, private, or unlisted');
+  }
+  const status = boundedString(
+    source.status,
+    'status',
+    issues,
+    { defaultValue: 'published', max: 16 }
+  ).toLowerCase();
+  if (!STATUSES.has(status)) {
+    issues.push('status must be draft, published, or archived');
   }
 
   const firstTag = Array.isArray(source.tags) ? source.tags[0] : undefined;
@@ -549,6 +601,7 @@ export const normalizeProblem = (input) => {
   }
   if (
     !isRestrictedMetadataOnly(provenance) &&
+    status !== 'draft' &&
     visibleTests.length + hiddenTests.length === 0
   ) {
     issues.push('at least one visible or hidden test is required');
@@ -572,8 +625,27 @@ export const normalizeProblem = (input) => {
     slug,
     statement,
     description: statement,
+    inputFormat: boundedString(source.inputFormat, 'inputFormat', issues, {
+      max: PROBLEM_LIMITS.format
+    }),
+    outputFormat: boundedString(source.outputFormat, 'outputFormat', issues, {
+      max: PROBLEM_LIMITS.format
+    }),
     explanation: boundedString(source.explanation, 'explanation', issues, {
       max: PROBLEM_LIMITS.explanation
+    }),
+    notes: boundedString(source.notes, 'notes', issues, {
+      max: PROBLEM_LIMITS.notes
+    }),
+    hints: normalizeStringArray(
+      source.hints,
+      'hints',
+      issues,
+      PROBLEM_LIMITS.hints,
+      2_000
+    ),
+    editorial: boundedString(source.editorial, 'editorial', issues, {
+      max: PROBLEM_LIMITS.editorial
     }),
     examples: normalizeExamples(source.examples, issues),
     constraints: normalizeStringArray(
@@ -609,6 +681,52 @@ export const normalizeProblem = (input) => {
       issues,
       { min: 16, max: PROBLEM_LIMITS.memoryLimitMb, defaultValue: 128 }
     ),
+    maxSourceSizeBytes: boundedInteger(
+      source.maxSourceSizeBytes ?? source.maxSourceSize,
+      'maxSourceSizeBytes',
+      issues,
+      {
+        min: 1_024,
+        max: PROBLEM_LIMITS.maxSourceSizeBytes,
+        defaultValue: 65_536
+      }
+    ),
+    estimatedSolveTimeMinutes: boundedInteger(
+      source.estimatedSolveTimeMinutes,
+      'estimatedSolveTimeMinutes',
+      issues,
+      {
+        min: 1,
+        max: PROBLEM_LIMITS.estimatedSolveTimeMinutes,
+        defaultValue: difficulty === 'easy'
+          ? 15
+          : difficulty === 'medium'
+            ? 30
+            : difficulty === 'hard'
+              ? 50
+              : 75
+      }
+    ),
+    visibility: /** @type {'public' | 'private' | 'unlisted'} */ (visibility),
+    status: /** @type {'draft' | 'published' | 'archived'} */ (status),
+    authorId: source.authorId == null
+      ? null
+      : boundedString(source.authorId, 'authorId', issues, {
+          required: true,
+          max: 128
+        }),
+    createdAt: source.createdAt == null
+      ? null
+      : boundedString(source.createdAt, 'createdAt', issues, {
+          required: true,
+          max: 64
+        }),
+    updatedAt: source.updatedAt == null
+      ? null
+      : boundedString(source.updatedAt, 'updatedAt', issues, {
+          required: true,
+          max: 64
+        }),
     metadata,
     provenance,
     version: boundedString(String(source.version ?? '1'), 'version', issues, {

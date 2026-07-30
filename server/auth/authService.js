@@ -19,7 +19,10 @@ import {
 const toPublicUser = (user) => ({
   id: user.id,
   email: user.email,
+  username: user.username ?? user.email.split('@')[0],
   displayName: user.displayName,
+  avatar: user.avatar ?? null,
+  provider: user.provider ?? 'credentials',
   ...(user.role === undefined ? {} : { role: user.role }),
   ...(user.createdAt === undefined ? {} : { createdAt: user.createdAt })
 });
@@ -107,6 +110,29 @@ export const createAuthService = (options) => {
     logout: async (sessionSecret) => {
       const secret = validateOpaqueIdentifier(sessionSecret, 'sessionSecret');
       await repository.revokeSession(digestSessionSecret(secret));
+    },
+
+    /** @param {unknown} sessionSecret */
+    refresh: async (sessionSecret) => {
+      const secret = validateOpaqueIdentifier(sessionSecret, 'sessionSecret');
+      const currentDigest = digestSessionSecret(secret);
+      return repository.transaction(async (transaction) => {
+        const user = await transaction.getSessionUser(currentDigest);
+        if (!user) throw new AuthenticationError();
+        await transaction.revokeSession(currentDigest);
+        const session = createOpaqueSession(sessionTtlMs, now);
+        await transaction.createSession({
+          userId: user.id,
+          secretDigest: session.secretDigest,
+          expiresAt: session.expiresAt
+        });
+        logger.info('auth.session.refreshed', { userId: user.id });
+        return {
+          user: toPublicUser(user),
+          sessionSecret: session.secret,
+          expiresAt: session.expiresAt
+        };
+      });
     },
 
     /** @param {unknown} userId @param {unknown} input */

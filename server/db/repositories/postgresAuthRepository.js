@@ -4,14 +4,14 @@ import { DatabaseError, ValidationError } from '../../errors/index.js';
 /** @typedef {import('../types.js').Database} Database */
 /** @typedef {import('../types.js').Queryable} Queryable */
 
-/** @typedef {{ id: string, email: string, display_name: string | null, role: 'user' | 'admin', created_at: string | Date, registered_at: string | Date }} RegisteredAccountRow */
+/** @typedef {{ id: string, email: string, username: string, display_name: string | null, avatar_url: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', created_at: string | Date, registered_at: string | Date }} RegisteredAccountRow */
 /** @typedef {RegisteredAccountRow & { password_hash: string }} StoredAccountRow */
-/** @typedef {{ id: string, user_id: string, email: string, display_name: string | null, role: 'user' | 'admin', expires_at: string | Date, created_at: string | Date, last_seen_at: string | Date }} ActiveSessionRow */
+/** @typedef {{ id: string, user_id: string, email: string, username: string, display_name: string | null, avatar_url: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', expires_at: string | Date, created_at: string | Date, last_seen_at: string | Date }} ActiveSessionRow */
 /** @typedef {{ claim_id: string, submission_count: number | string }} GuestClaimRow */
-/** @typedef {{ id: string, email: string, displayName: string, role: 'user' | 'admin', createdAt: number, registeredAt: number }} RegisteredAccount */
+/** @typedef {{ id: string, email: string, username: string, displayName: string, avatar: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', createdAt: number, registeredAt: number }} RegisteredAccount */
 /** @typedef {RegisteredAccount & { passwordHash: string }} StoredAccount */
-/** @typedef {{ id: string, userId: string, email: string, displayName: string, role: 'user' | 'admin', expiresAt: number, createdAt: number, lastSeenAt: number }} ActiveSession */
-/** @typedef {{ id?: string, email: string, passwordHash: string, displayName?: string, role?: 'user' | 'admin', registeredAt?: number | Date }} RegisteredAccountWrite */
+/** @typedef {{ id: string, userId: string, email: string, username: string, displayName: string, avatar: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', expiresAt: number, createdAt: number, lastSeenAt: number }} ActiveSession */
+/** @typedef {{ id?: string, email: string, passwordHash: string, displayName?: string, role?: 'user' | 'problem_setter' | 'moderator' | 'admin', registeredAt?: number | Date }} RegisteredAccountWrite */
 /** @typedef {{ id?: string, userId: string, tokenHash?: string, secretDigest?: string, expiresAt: number | Date }} SessionWrite */
 /** @typedef {{ guestId: string, userId: string }} GuestClaimWrite */
 /** @typedef {{ claimed: boolean, claimId: string | null, submissionCount: number }} GuestClaimResult */
@@ -46,6 +46,19 @@ const requiredText = (value, field) => {
 const normalizeEmail = (value) => requiredText(value, 'Email').toLowerCase();
 
 /** @param {unknown} value */
+const usernameBase = (value) => {
+  const normalized = String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 70)
+    .replace(/-+$/g, '');
+  return normalized.length >= 2 ? normalized : 'player';
+};
+
+/** @param {unknown} value */
 const normalizeTokenHash = (value) => {
   const hash = requiredText(value, 'Session token hash').toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(hash)) {
@@ -72,7 +85,10 @@ const toRegisteredAccount = (row) =>
   Object.freeze({
     id: row.id,
     email: row.email,
+    username: row.username,
     displayName: row.display_name ?? row.email,
+    avatar: row.avatar_url ?? null,
+    provider: row.provider,
     role: row.role,
     createdAt: new Date(row.created_at).getTime(),
     registeredAt: new Date(row.registered_at).getTime()
@@ -90,7 +106,10 @@ const toActiveSession = (row) =>
     id: row.id,
     userId: row.user_id,
     email: row.email,
+    username: row.username,
     displayName: row.display_name ?? row.email,
+    avatar: row.avatar_url ?? null,
+    provider: row.provider,
     role: row.role,
     expiresAt: new Date(row.expires_at).getTime(),
     createdAt: new Date(row.created_at).getTime(),
@@ -122,24 +141,47 @@ export const createPostgresAuthRepository = ({ database }) => {
         ? email
         : requiredText(value.displayName, 'Display name');
       const role = value?.role ?? 'user';
-      if (role !== 'user' && role !== 'admin') {
+      if (!['user', 'problem_setter', 'moderator', 'admin'].includes(role)) {
         throw new ValidationError('Account role is invalid.', { code: 'AUTH_ACCOUNT_ROLE_INVALID' });
       }
+      const baseUsername = usernameBase(displayName || email.split('@')[0]);
       const registeredAt = validTime(value?.registeredAt, 'Registration time');
       /** @type {import('../types.js').QueryResult<RegisteredAccountRow>} */
       const result = await queryable.query(
-        `INSERT INTO users (
-           id, account_kind, email, password_hash, display_name, role, registered_at, updated_at
-         ) VALUES ($1, 'registered', $2, $3, $4, $5, $6::TIMESTAMPTZ, CURRENT_TIMESTAMP)
+        `WITH locked AS MATERIALIZED (
+           SELECT pg_advisory_xact_lock(
+             hashtextextended(lower(left($7, 70)), 0)
+           )
+         ),
+         candidate AS (
+           SELECT CASE WHEN suffix = 1 THEN $7 ELSE left($7, 70) || suffix::TEXT END AS username
+           FROM generate_series(1, 10000) AS suffix
+           CROSS JOIN locked
+           WHERE NOT EXISTS (
+             SELECT 1 FROM users WHERE lower(users.username) =
+               lower(CASE WHEN suffix = 1 THEN $7 ELSE left($7, 70) || suffix::TEXT END)
+           )
+           ORDER BY suffix
+           LIMIT 1
+         )
+         INSERT INTO users (
+           id, account_kind, email, password_hash, display_name, role, registered_at,
+           username, provider, updated_at
+         )
+         SELECT $1, 'registered', $2, $3, $4, $5, $6::TIMESTAMPTZ,
+                candidate.username, 'credentials', CURRENT_TIMESTAMP
+         FROM candidate
          ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO NOTHING
-         RETURNING id, email, display_name, role, created_at, registered_at`,
+         RETURNING id, email, username, display_name, avatar_url, provider, role,
+                   created_at, registered_at`,
         [
           value?.id || crypto.randomUUID(),
           email,
           passwordHash,
           displayName,
           role,
-          new Date(registeredAt).toISOString()
+          new Date(registeredAt).toISOString(),
+          baseUsername
         ]
       );
       if (!result.rows[0]) {
@@ -154,7 +196,8 @@ export const createPostgresAuthRepository = ({ database }) => {
     const findRegisteredAccountByEmail = async (email) => {
       /** @type {import('../types.js').QueryResult<RegisteredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, display_name, role, created_at, registered_at
+        `SELECT id, email, username, display_name, avatar_url, provider, role,
+                created_at, registered_at
          FROM users WHERE account_kind = 'registered' AND lower(email) = $1`,
         [normalizeEmail(email)]
       );
@@ -165,7 +208,8 @@ export const createPostgresAuthRepository = ({ database }) => {
     const findUserByEmail = async (email) => {
       /** @type {import('../types.js').QueryResult<StoredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, display_name, role, password_hash, created_at, registered_at
+        `SELECT id, email, username, display_name, avatar_url, provider, role,
+                password_hash, created_at, registered_at
          FROM users WHERE account_kind = 'registered' AND lower(email) = $1`,
         [normalizeEmail(email)]
       );
@@ -176,7 +220,8 @@ export const createPostgresAuthRepository = ({ database }) => {
     const getUserById = async (userId) => {
       /** @type {import('../types.js').QueryResult<RegisteredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, display_name, role, created_at, registered_at
+        `SELECT id, email, username, display_name, avatar_url, provider, role,
+                created_at, registered_at
          FROM users WHERE id = $1 AND account_kind = 'registered'`,
         [requiredText(userId, 'User id')]
       );
@@ -203,7 +248,10 @@ export const createPostgresAuthRepository = ({ database }) => {
          WHERE account.id = $4 AND account.account_kind = 'registered'
          RETURNING id, user_id,
            (SELECT email FROM users WHERE id = user_id) AS email,
+           (SELECT username FROM users WHERE id = user_id) AS username,
            (SELECT display_name FROM users WHERE id = user_id) AS display_name,
+           (SELECT avatar_url FROM users WHERE id = user_id) AS avatar_url,
+           (SELECT provider FROM users WHERE id = user_id) AS provider,
            (SELECT role FROM users WHERE id = user_id) AS role,
            expires_at, created_at, last_seen_at`,
         [
@@ -234,7 +282,8 @@ export const createPostgresAuthRepository = ({ database }) => {
            AND session.revoked_at IS NULL
            AND session.expires_at > $2::TIMESTAMPTZ
            AND account.account_kind = 'registered'
-         RETURNING session.id, session.user_id, account.email, account.display_name, account.role,
+         RETURNING session.id, session.user_id, account.email, account.username,
+                   account.display_name, account.avatar_url, account.provider, account.role,
                    session.expires_at, session.created_at, session.last_seen_at`,
         [normalizeTokenHash(tokenHash), new Date(currentTime).toISOString()]
       );
@@ -254,7 +303,8 @@ export const createPostgresAuthRepository = ({ database }) => {
            AND session.revoked_at IS NULL
            AND session.expires_at > $2::TIMESTAMPTZ
            AND account.account_kind = 'registered'
-         RETURNING account.id, account.email, account.display_name, account.role,
+         RETURNING account.id, account.email, account.username, account.display_name,
+                   account.avatar_url, account.provider, account.role,
                    account.created_at, account.registered_at`,
         [normalizeTokenHash(sessionDigest), new Date(currentTime).toISOString()]
       );
@@ -338,7 +388,8 @@ export const createPostgresAuthRepository = ({ database }) => {
       const result = await queryable.query(
         `UPDATE users SET display_name = $2, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND account_kind = 'registered'
-         RETURNING id, email, display_name, role, created_at, registered_at`,
+         RETURNING id, email, username, display_name, avatar_url, provider, role,
+                   created_at, registered_at`,
         [requiredText(value?.userId, 'User id'), requiredText(value?.displayName, 'Display name')]
       );
       if (!result.rows[0]) {

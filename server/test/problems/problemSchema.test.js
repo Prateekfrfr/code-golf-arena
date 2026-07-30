@@ -87,8 +87,8 @@ test('restricted metadata-only problems cannot carry hidden tests', () => {
       hiddenTests: [{ input: 'secret', expectedOutput: 'secret' }],
       provenance: {
         state: 'RESTRICTED_METADATA_ONLY',
-        attribution: 'LeetCode',
-        canonicalUrl: 'https://leetcode.com/problems/restricted-hidden-test/'
+        attribution: 'Example Archive',
+        canonicalUrl: 'https://example.com/problems/restricted-hidden-test/'
       }
     }),
     /cannot include hiddenTests/

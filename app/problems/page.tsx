@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   ConnectionStatus,
   EmptyState,
@@ -36,6 +37,12 @@ const topics = [
   "stacks",
   "graphs",
   "hashing",
+  "sorting",
+  "searching",
+  "greedy",
+  "trees",
+  "implementation",
+  "binary-search",
 ] as const;
 
 const isProblemResponse = (value: unknown): value is ProblemResponse => {
@@ -204,6 +211,7 @@ export default function ProblemsPage() {
               <option value="easy">Easy</option>
               <option value="medium">Medium</option>
               <option value="hard">Hard</option>
+              <option value="very-hard">Very hard</option>
             </select>
           </div>
           <div>
@@ -316,6 +324,9 @@ export default function ProblemsPage() {
                       </dd>
                     </div>
                   </dl>
+                  <Link className="button problem-open" href={`/problems/${problem.slug}`}>
+                    read problem
+                  </Link>
                 </article>
               ))}
             </div>

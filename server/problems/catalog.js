@@ -25,6 +25,9 @@ export const createProblemCatalog = (records) => {
     const normalized = normalizeQuery(query);
     return problems
       .filter((problem) => {
+        if (problem.status !== 'published' || problem.visibility !== 'public') {
+          return false;
+        }
         if (
           normalized.search &&
           !`${problem.title} ${problem.statement} ${problem.tags.join(' ')}`

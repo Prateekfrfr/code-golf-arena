@@ -52,18 +52,18 @@ test('restricted metadata-only provenance only exposes attribution and canonical
     },
     provenance: {
       state: 'RESTRICTED_METADATA_ONLY',
-      attribution: 'LeetCode',
-      canonicalUrl: 'https://leetcode.com/problems/restricted-problem/'
+      attribution: 'Example Archive',
+      canonicalUrl: 'https://example.com/problems/restricted-problem/'
     }
   };
 
   const publicProblem = toPublicProblem(restricted);
   const serialized = JSON.stringify(publicProblem);
   assert.equal(publicProblem.provenance.state, 'RESTRICTED_METADATA_ONLY');
-  assert.equal(publicProblem.attribution, 'LeetCode');
+  assert.equal(publicProblem.attribution, 'Example Archive');
   assert.equal(
     publicProblem.canonicalUrl,
-    'https://leetcode.com/problems/restricted-problem/'
+    'https://example.com/problems/restricted-problem/'
   );
   for (const forbidden of [
     'statement',

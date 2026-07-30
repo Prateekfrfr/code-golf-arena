@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { formatMissingEnvError } from '../env.js';
 import { DatabaseError } from '../errors/index.js';
 import { logger as defaultLogger } from '../observability/logger.js';
 
@@ -22,10 +23,13 @@ export const createPostgresDatabase = ({
   log = defaultLogger
 }) => {
   if (!connectionString) {
-    throw new DatabaseError('DATABASE_URL is required for PostgreSQL persistence.', {
-      code: 'DATABASE_CONFIGURATION_INVALID',
-      expose: true
-    });
+    throw new DatabaseError(
+      formatMissingEnvError('DATABASE_URL', 'required for PostgreSQL persistence'),
+      {
+        code: 'DATABASE_CONFIGURATION_INVALID',
+        expose: true
+      }
+    );
   }
 
   const pool = new Pool({

@@ -1,3 +1,4 @@
+import '../../config.js';
 import { problems } from '../../../data/problems.js';
 import { normalizeProblem } from '../../problems/problemSchema.js';
 import { detectProblemDuplicates } from '../../problemImport/duplicateDetector.js';

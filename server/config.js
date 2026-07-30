@@ -1,3 +1,5 @@
+import { formatMissingEnvError } from './env.js';
+
 /** @typedef {{ min: number, max: number }} IntegerBounds */
 /** @typedef {{ max?: number, pattern?: RegExp }} StringOptions */
 
@@ -44,10 +46,14 @@ const ephemeralStateMode = readString('EPHEMERAL_STATE_MODE', 'memory', {
 const databaseUrl = readString('DATABASE_URL', '', { max: 4_000 });
 const redisUrl = readString('REDIS_URL', '', { max: 4_000 });
 if (persistenceMode === 'postgres' && !databaseUrl) {
-  throw new Error('DATABASE_URL is required when PERSISTENCE_MODE is postgres.');
+  throw new Error(
+    formatMissingEnvError('DATABASE_URL', 'required when PERSISTENCE_MODE is postgres')
+  );
 }
 if (ephemeralStateMode === 'redis' && !redisUrl) {
-  throw new Error('REDIS_URL is required when EPHEMERAL_STATE_MODE is redis.');
+  throw new Error(
+    formatMissingEnvError('REDIS_URL', 'required when EPHEMERAL_STATE_MODE is redis')
+  );
 }
 
 /** @returns {string[]} */
@@ -59,7 +65,7 @@ const readOrigins = () => {
 
   if (configured.length > 0) return configured;
   if (process.env.NODE_ENV === 'production') {
-    throw new Error('CORS_ORIGINS is required in production.');
+    throw new Error(formatMissingEnvError('CORS_ORIGINS', 'required in production'));
   }
 
   return ['http://localhost:3000'];

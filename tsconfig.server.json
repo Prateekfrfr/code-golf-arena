@@ -12,6 +12,7 @@
   },
   "include": [
     "server/config.js",
+    "server/env.js",
     "server/auth/**/*.js",
     "server/db/**/*.js",
     "server/errors/**/*.js",

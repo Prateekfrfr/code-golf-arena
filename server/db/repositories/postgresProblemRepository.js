@@ -473,8 +473,8 @@ export const createPostgresProblemRepository = ({ database }) => {
           updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7::TEXT[], $8::TEXT[], $9, $10, $11::JSONB, $12,
-          $13, $14, $15, $16::JSONB, $17::TIMESTAMPTZ, $18, $19::UUID, $20, $21,
-          CASE WHEN $20 = 'archived' THEN CURRENT_TIMESTAMP ELSE NULL END,
+          $13, $14, $15, $16::JSONB, $17::TIMESTAMPTZ, $18, $19::UUID, $20::VARCHAR, $21::VARCHAR,
+          CASE WHEN $20::VARCHAR = 'archived' THEN CURRENT_TIMESTAMP ELSE NULL END,
           NULL, CURRENT_TIMESTAMP
         )
         ON CONFLICT (slug) DO UPDATE SET

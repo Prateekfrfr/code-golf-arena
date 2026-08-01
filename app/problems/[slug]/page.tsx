@@ -9,8 +9,18 @@ import {
   SurfaceCard,
   TopNav,
 } from "@/components/ui/PremiumShell";
+import { SubmissionGuide } from "@/components/ui/SubmissionGuide";
 import { apiRequest } from "@/lib/api";
 import type { Language, Problem } from "@/types/domain";
+
+const defaultLanguages: Language[] = ["python", "javascript", "cpp", "java"];
+
+const languageLabels: Record<Language, string> = {
+  python: "Python",
+  javascript: "JavaScript",
+  cpp: "C++",
+  java: "Java",
+};
 
 export default function ProblemDetailPage({
   params,
@@ -71,7 +81,7 @@ export default function ProblemDetailPage({
   const supportedLanguages =
     problem.supportedLanguages?.length
       ? problem.supportedLanguages
-      : (["python", "javascript", "cpp", "java"] as Language[]);
+      : defaultLanguages;
 
   return (
     <PremiumShell
@@ -92,7 +102,7 @@ export default function ProblemDetailPage({
               aria-label="Editor language"
             >
               {supportedLanguages.map((item) => (
-                <option key={item} value={item}>{item === "cpp" ? "C++" : item}</option>
+                <option key={item} value={item}>{languageLabels[item]}</option>
               ))}
             </select>
           }
@@ -116,6 +126,8 @@ export default function ProblemDetailPage({
               <div><dt>Estimate</dt><dd>{problem.estimatedSolveTimeMinutes} min</dd></div>
             </dl>
           </header>
+
+          <SubmissionGuide supportedLanguages={supportedLanguages} />
 
           <section>
             <h2>Statement</h2>

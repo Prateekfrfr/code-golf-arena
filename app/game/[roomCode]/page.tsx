@@ -13,6 +13,7 @@ import {
   ToastRegion,
   TopNav,
 } from "@/components/ui/PremiumShell";
+import { SubmissionGuide } from "@/components/ui/SubmissionGuide";
 import { useSocketConnection } from "@/hooks/useSocketConnection";
 import { useTransientMessage } from "@/hooks/useTransientMessage";
 import { SocketEvents } from "../../../shared/events";
@@ -782,6 +783,7 @@ export default function GameRoom({
                     </ul>
                   </details>
                 )}
+                <SubmissionGuide supportedLanguages={supportedLanguages} variant="panel" />
               </>
             ) : connected && problemDelayed ? (
               <div className="inline-state" role="status">

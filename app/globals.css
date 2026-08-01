@@ -2087,6 +2087,74 @@ summary:focus-visible {
   padding-left: 20px;
 }
 
+.submission-guide {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(228, 225, 210, 0.025);
+}
+
+.submission-guide summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.submission-guide-body {
+  display: grid;
+  gap: 14px;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.submission-guide-body p {
+  margin: 12px 0 0;
+  color: var(--muted-strong);
+  line-height: 1.65;
+}
+
+.submission-guide-body code {
+  font-family: var(--font-mono);
+}
+
+.submission-example-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.submission-example {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.submission-example strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.submission-example pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #090a08;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .problem-facts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2363,7 +2431,8 @@ summary:focus-visible {
 @media (max-width: 620px) {
   .problem-facts,
   .form-grid,
-  .admin-filters {
+  .admin-filters,
+  .submission-example-grid {
     grid-template-columns: 1fr;
   }
 

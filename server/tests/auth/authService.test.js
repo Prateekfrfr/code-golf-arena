@@ -69,6 +69,13 @@ const createRepository = () => {
       if (!user) throw new Error('test user does not exist');
       user.displayName = input.displayName;
       return user;
+    },
+    async createEmailVerificationCode() {},
+    async verifyEmailCode({ email }) {
+      const user = users.get(email);
+      if (!user) return null;
+      user.emailVerifiedAt = Date.now();
+      return user;
     }
   };
   return repository;
@@ -124,24 +131,24 @@ test('registration atomically creates an account, claims guest work, and returns
   const service = createAuthService({
     repository,
     logger: { info: (event, context = {}) => entries.push({ event, context }) },
-    now: () => 1_700_000_000_000
+    now: () => 1_700_000_000_000,
+    mailer: { sendVerificationCode: async () => {} }
   });
 
   const registered = await service.register(validRegistration);
-  assert.equal(registered.user.email, 'player@example.test');
-  assert.equal(registered.user.passwordHash, undefined);
+  assert.equal(registered.email, 'player@example.test');
+  assert.equal(registered.verificationRequired, true);
   assert.equal(repository.calls.transactions, 1);
   assert.deepEqual(repository.claims, [{ guestId: 'guest_123', userId: 'user_1' }]);
   assert.equal(entries[0].event, 'auth.registration.completed');
-  assert.equal(JSON.stringify(entries).includes(registered.sessionSecret), false);
   assert.equal(JSON.stringify(entries).includes(validRegistration.password), false);
-  assert.deepEqual(await service.getSessionUser(registered.sessionSecret), registered.user);
 });
 
 test('login uses generic authentication errors and logout revokes by digest', async () => {
   const repository = createRepository();
-  const service = createAuthService({ repository, logger: { info: () => {} } });
+  const service = createAuthService({ repository, logger: { info: () => {} }, mailer: { sendVerificationCode: async () => {} } });
   await service.register({ ...validRegistration, guestId: null });
+  await service.verifyEmail({ email: validRegistration.email, code: '000000' });
 
   await assert.rejects(
     service.login({ email: validRegistration.email, password: 'wrong password but long enough' }),
@@ -163,9 +170,9 @@ test('login uses generic authentication errors and logout revokes by digest', as
 
 test('profile updates require a trusted opaque user id and return a public user', async () => {
   const repository = createRepository();
-  const service = createAuthService({ repository, logger: { info: () => {} } });
+  const service = createAuthService({ repository, logger: { info: () => {} }, mailer: { sendVerificationCode: async () => {} } });
   const registered = await service.register({ ...validRegistration, guestId: null });
-  const updated = await service.updateProfile(registered.user.id, { displayName: 'Updated Name' });
+  const updated = await service.updateProfile('user_1', { displayName: 'Updated Name' });
   assert.equal(updated.displayName, 'Updated Name');
   await assert.rejects(
     service.updateProfile('bad id!', { displayName: 'Updated Name' }),

@@ -1,5 +1,6 @@
 import { logger as defaultLogger } from '../observability/logger.js';
 import { assertAuthRepository } from './authRepository.js';
+import crypto from 'node:crypto';
 import { createOpaqueSession, digestSessionSecret, hashPassword, verifyPassword } from './credentials.js';
 import { AuthenticationError } from './errors.js';
 import {
@@ -7,7 +8,8 @@ import {
   validateLoginInput,
   validateOpaqueIdentifier,
   validateProfileInput,
-  validateRegistrationInput
+  validateRegistrationInput,
+  validateVerificationInput
 } from './validators.js';
 
 /** @typedef {import('./authRepository.js').AuthRepository} AuthRepository */
@@ -38,14 +40,21 @@ const authenticatePassword = async (repository, email, password) => {
   return user;
 };
 
+const createVerificationCode = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+/** @param {string} code */
+const digestVerificationCode = (code) => crypto.createHash('sha256').update(code, 'utf8').digest('hex');
+
 /**
- * @param {{ repository: AuthRepository, logger?: AuthLogger, sessionTtlMs?: number, bootstrapAdminEmail?: string, now?: () => number }} options
+ * @param {{ repository: AuthRepository, logger?: AuthLogger, sessionTtlMs?: number, verificationCodeTtlMs?: number, bootstrapAdminEmail?: string, mailer: { sendVerificationCode: (input: {email: string, code: string}) => Promise<void> }, now?: () => number }} options
  */
 export const createAuthService = (options) => {
   assertAuthRepository(options?.repository);
   const repository = options.repository;
   const logger = options.logger ?? defaultLogger;
   const sessionTtlMs = options.sessionTtlMs ?? 1000 * 60 * 60 * 24 * 30;
+  const verificationCodeTtlMs = options.verificationCodeTtlMs ?? 10 * 60_000;
+  const mailer = options.mailer;
+  if (!mailer?.sendVerificationCode) throw new TypeError('An email verification mailer is required.');
   const bootstrapAdminEmail = options.bootstrapAdminEmail
     ? normalizeEmail(options.bootstrapAdminEmail)
     : null;
@@ -57,7 +66,7 @@ export const createAuthService = (options) => {
       const registration = validateRegistrationInput(input);
       const passwordHash = await hashPassword(registration.password);
 
-      return repository.transaction(async (transaction) => {
+      const pending = /** @type {{ email: string, code: string }} */ (await repository.transaction(async (transaction) => {
         const existing = await transaction.findUserByEmail(registration.email);
         if (existing) {
           throw new AuthenticationError('Unable to register with those credentials.');
@@ -71,15 +80,17 @@ export const createAuthService = (options) => {
         if (registration.guestId) {
           await transaction.claimGuestSubmissions({ guestId: registration.guestId, userId: user.id });
         }
-        const session = createOpaqueSession(sessionTtlMs, now);
-        await transaction.createSession({
+        const code = createVerificationCode();
+        await transaction.createEmailVerificationCode({
           userId: user.id,
-          secretDigest: session.secretDigest,
-          expiresAt: session.expiresAt
+          codeHash: digestVerificationCode(code),
+          expiresAt: new Date(now() + verificationCodeTtlMs)
         });
         logger.info('auth.registration.completed', { userId: user.id });
-        return { user: toPublicUser(user), sessionSecret: session.secret, expiresAt: session.expiresAt };
-      });
+        return { email: user.email, code };
+      }));
+      await mailer.sendVerificationCode(pending);
+      return { verificationRequired: true, email: pending.email };
     },
 
     /** @param {unknown} input */
@@ -87,6 +98,9 @@ export const createAuthService = (options) => {
       const login = validateLoginInput(input);
       return repository.transaction(async (transaction) => {
         const user = await authenticatePassword(transaction, login.email, login.password);
+        if (!user.emailVerifiedAt) {
+          throw new AuthenticationError('Verify your email before signing in.');
+        }
         const session = createOpaqueSession(sessionTtlMs, now);
         await transaction.createSession({
           userId: user.id,
@@ -96,6 +110,38 @@ export const createAuthService = (options) => {
         logger.info('auth.login.completed', { userId: user.id });
         return { user: toPublicUser(user), sessionSecret: session.secret, expiresAt: session.expiresAt };
       });
+    },
+
+    /** @param {unknown} input */
+    verifyEmail: async (input) => {
+      const verification = validateVerificationInput(input);
+      return repository.transaction(async (transaction) => {
+        const user = await transaction.verifyEmailCode({
+          email: verification.email,
+          codeHash: digestVerificationCode(verification.code)
+        });
+        if (!user) throw new AuthenticationError('The verification code is invalid or has expired.');
+        const session = createOpaqueSession(sessionTtlMs, now);
+        await transaction.createSession({ userId: user.id, secretDigest: session.secretDigest, expiresAt: session.expiresAt });
+        logger.info('auth.email.verified', { userId: user.id });
+        return { user: toPublicUser(user), sessionSecret: session.secret, expiresAt: session.expiresAt };
+      });
+    },
+
+    /** @param {unknown} input */
+    resendVerification: async (input) => {
+      const email = normalizeEmail(/** @type {{ email?: unknown }} */ (input).email);
+      const user = await repository.findUserByEmail(email);
+      if (!user || user.emailVerifiedAt) return { accepted: true };
+      const code = createVerificationCode();
+      await repository.createEmailVerificationCode({
+        userId: user.id,
+        codeHash: digestVerificationCode(code),
+        expiresAt: new Date(now() + verificationCodeTtlMs)
+      });
+      await mailer.sendVerificationCode({ email: user.email, code });
+      logger.info('auth.email.verification_resent', { userId: user.id });
+      return { accepted: true };
     },
 
     /** @param {unknown} sessionSecret */

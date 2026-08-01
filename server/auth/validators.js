@@ -105,3 +105,13 @@ export const validateLoginInput = (payload) => ({
 export const validateProfileInput = (payload) => ({
   displayName: validateDisplayName(readOwnValue(payload, 'displayName'))
 });
+
+/** @param {unknown} payload */
+export const validateVerificationInput = (payload) => {
+  const email = normalizeEmail(readOwnValue(payload, 'email'));
+  const code = requiredString(readOwnValue(payload, 'code'), 'code', 16).trim();
+  if (!/^\d{6}$/.test(code)) {
+    throw new ValidationError('code is invalid.', { code: 'INVALID_AUTH_INPUT' });
+  }
+  return { email, code };
+};

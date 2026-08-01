@@ -11,10 +11,11 @@ import type { AuthUser } from "@/types/domain";
 export default function AuthPage() {
   const router = useRouter();
   const { user, setUser } = useAuth();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "verify">("login");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -27,7 +28,17 @@ export default function AuthPage() {
     setPending(true);
     setError("");
     try {
-      const result = await apiRequest<{ user: AuthUser }>(
+      if (mode === "verify") {
+        const result = await apiRequest<{ user: AuthUser }>("/api/auth/verify-email", {
+          method: "POST",
+          body: JSON.stringify({ email, code }),
+        });
+        setUser(result.user);
+        socket.disconnect().connect();
+        router.replace("/");
+        return;
+      }
+      const result = await apiRequest<{ user?: AuthUser; verificationRequired?: boolean; email?: string }>(
         mode === "register" ? "/api/auth/register" : "/api/auth/login",
         {
           method: "POST",
@@ -43,6 +54,13 @@ export default function AuthPage() {
           ),
         },
       );
+      if (result.verificationRequired) {
+        setEmail(result.email ?? email);
+        setMode("verify");
+        setMessage("We sent a six-digit verification code to your email.");
+        return;
+      }
+      if (!result.user) throw new Error("Authentication response was incomplete.");
       setUser(result.user);
       socket.disconnect().connect();
       router.replace("/");
@@ -57,6 +75,8 @@ export default function AuthPage() {
     }
   };
 
+  const [message, setMessage] = useState("");
+
   return (
     <PremiumShell
       topbar={<TopNav eyebrow="Local account" title="Sign in to compete" />}
@@ -65,14 +85,14 @@ export default function AuthPage() {
         <SurfaceCard className="auth-card">
           <div className="auth-heading">
             <div className="eyebrow">first-party authentication</div>
-            <h1>{mode === "login" ? "Welcome back." : "Create your arena account."}</h1>
+            <h1>{mode === "login" ? "Welcome back." : mode === "verify" ? "Verify your email." : "Create your arena account."}</h1>
             <p>
               Browsing and practice stay open to guests. Accounts are required
               for submissions, competitive rooms, saved progress, and authoring.
             </p>
           </div>
 
-          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          {mode !== "verify" && <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
             <button
               type="button"
               role="tab"
@@ -97,10 +117,23 @@ export default function AuthPage() {
             >
               register
             </button>
-          </div>
+          </div>}
 
           <form className="stack auth-form" onSubmit={submit}>
-            {mode === "register" && (
+            {mode === "verify" ? (
+              <>
+                <label className="stack">
+                  <span className="form-label">Verification code</span>
+                  <input className="input" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} required />
+                </label>
+                <button className="button" type="button" disabled={pending} onClick={async () => {
+                  setPending(true); setError("");
+                  try { await apiRequest("/api/auth/resend-verification", { method: "POST", body: JSON.stringify({ email }) }); setMessage("A new code was sent."); }
+                  catch (requestError) { setError(requestError instanceof Error ? requestError.message : "The code could not be resent."); }
+                  finally { setPending(false); }
+                }}>resend code</button>
+              </>
+            ) : mode === "register" && (
               <label className="stack">
                 <span className="form-label">Display name</span>
                 <input
@@ -114,6 +147,7 @@ export default function AuthPage() {
                 />
               </label>
             )}
+            {message && <div className="form-message" role="status">{message}</div>}
             <label className="stack">
               <span className="form-label">Email</span>
               <input
@@ -142,7 +176,9 @@ export default function AuthPage() {
             <button className="button button-primary" type="submit" disabled={pending}>
               {pending
                 ? "working…"
-                : mode === "login"
+                : mode === "verify"
+                  ? "verify email"
+                  : mode === "login"
                   ? "sign in"
                   : "create account"}
             </button>

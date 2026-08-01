@@ -4,11 +4,11 @@ import { DatabaseError, ValidationError } from '../../errors/index.js';
 /** @typedef {import('../types.js').Database} Database */
 /** @typedef {import('../types.js').Queryable} Queryable */
 
-/** @typedef {{ id: string, email: string, username: string, display_name: string | null, avatar_url: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', created_at: string | Date, registered_at: string | Date }} RegisteredAccountRow */
+/** @typedef {{ id: string, email: string, username: string, display_name: string | null, avatar_url: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', email_verified_at: string | Date | null, created_at: string | Date, registered_at: string | Date }} RegisteredAccountRow */
 /** @typedef {RegisteredAccountRow & { password_hash: string }} StoredAccountRow */
 /** @typedef {{ id: string, user_id: string, email: string, username: string, display_name: string | null, avatar_url: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', expires_at: string | Date, created_at: string | Date, last_seen_at: string | Date }} ActiveSessionRow */
 /** @typedef {{ claim_id: string, submission_count: number | string }} GuestClaimRow */
-/** @typedef {{ id: string, email: string, username: string, displayName: string, avatar: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', createdAt: number, registeredAt: number }} RegisteredAccount */
+/** @typedef {{ id: string, email: string, username: string, displayName: string, avatar: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', emailVerifiedAt: number | null, createdAt: number, registeredAt: number }} RegisteredAccount */
 /** @typedef {RegisteredAccount & { passwordHash: string }} StoredAccount */
 /** @typedef {{ id: string, userId: string, email: string, username: string, displayName: string, avatar: string | null, provider: 'credentials', role: 'user' | 'problem_setter' | 'moderator' | 'admin', expiresAt: number, createdAt: number, lastSeenAt: number }} ActiveSession */
 /** @typedef {{ id?: string, email: string, passwordHash: string, displayName?: string, role?: 'user' | 'problem_setter' | 'moderator' | 'admin', registeredAt?: number | Date }} RegisteredAccountWrite */
@@ -28,7 +28,9 @@ import { DatabaseError, ValidationError } from '../../errors/index.js';
  * revokeSession: (sessionDigest: string, revokedAt?: number | Date) => Promise<boolean>,
  * revokeSessionByTokenHash: (tokenHash: string, revokedAt?: number | Date) => Promise<boolean>,
  * claimGuestSubmissions: (value: GuestClaimWrite) => Promise<GuestClaimResult>,
- * updateUserProfile: (value: { userId: string, displayName: string }) => Promise<RegisteredAccount>
+ * updateUserProfile: (value: { userId: string, displayName: string }) => Promise<RegisteredAccount>,
+ * createEmailVerificationCode: (value: { userId: string, codeHash: string, expiresAt: number | Date }) => Promise<void>,
+ * verifyEmailCode: (value: { email: string, codeHash: string }) => Promise<RegisteredAccount | null>
  * }} PostgresAuthRepository */
 
 /** @param {unknown} value @param {string} field */
@@ -90,6 +92,7 @@ const toRegisteredAccount = (row) =>
     avatar: row.avatar_url ?? null,
     provider: row.provider,
     role: row.role,
+    emailVerifiedAt: row.email_verified_at ? new Date(row.email_verified_at).getTime() : null,
     createdAt: new Date(row.created_at).getTime(),
     registeredAt: new Date(row.registered_at).getTime()
   });
@@ -172,7 +175,7 @@ export const createPostgresAuthRepository = ({ database }) => {
                 candidate.username, 'credentials', CURRENT_TIMESTAMP
          FROM candidate
          ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO NOTHING
-         RETURNING id, email, username, display_name, avatar_url, provider, role,
+         RETURNING id, email, username, display_name, avatar_url, provider, role, email_verified_at,
                    created_at, registered_at`,
         [
           value?.id || crypto.randomUUID(),
@@ -196,7 +199,7 @@ export const createPostgresAuthRepository = ({ database }) => {
     const findRegisteredAccountByEmail = async (email) => {
       /** @type {import('../types.js').QueryResult<RegisteredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, username, display_name, avatar_url, provider, role,
+        `SELECT id, email, username, display_name, avatar_url, provider, role, email_verified_at,
                 created_at, registered_at
          FROM users WHERE account_kind = 'registered' AND lower(email) = $1`,
         [normalizeEmail(email)]
@@ -208,7 +211,7 @@ export const createPostgresAuthRepository = ({ database }) => {
     const findUserByEmail = async (email) => {
       /** @type {import('../types.js').QueryResult<StoredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, username, display_name, avatar_url, provider, role,
+        `SELECT id, email, username, display_name, avatar_url, provider, role, email_verified_at,
                 password_hash, created_at, registered_at
          FROM users WHERE account_kind = 'registered' AND lower(email) = $1`,
         [normalizeEmail(email)]
@@ -220,7 +223,7 @@ export const createPostgresAuthRepository = ({ database }) => {
     const getUserById = async (userId) => {
       /** @type {import('../types.js').QueryResult<RegisteredAccountRow>} */
       const result = await queryable.query(
-        `SELECT id, email, username, display_name, avatar_url, provider, role,
+        `SELECT id, email, username, display_name, avatar_url, provider, role, email_verified_at,
                 created_at, registered_at
          FROM users WHERE id = $1 AND account_kind = 'registered'`,
         [requiredText(userId, 'User id')]
@@ -304,7 +307,7 @@ export const createPostgresAuthRepository = ({ database }) => {
            AND session.expires_at > $2::TIMESTAMPTZ
            AND account.account_kind = 'registered'
          RETURNING account.id, account.email, account.username, account.display_name,
-                   account.avatar_url, account.provider, account.role,
+                   account.avatar_url, account.provider, account.role, account.email_verified_at,
                    account.created_at, account.registered_at`,
         [normalizeTokenHash(sessionDigest), new Date(currentTime).toISOString()]
       );
@@ -388,7 +391,7 @@ export const createPostgresAuthRepository = ({ database }) => {
       const result = await queryable.query(
         `UPDATE users SET display_name = $2, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND account_kind = 'registered'
-         RETURNING id, email, username, display_name, avatar_url, provider, role,
+         RETURNING id, email, username, display_name, avatar_url, provider, role, email_verified_at,
                    created_at, registered_at`,
         [requiredText(value?.userId, 'User id'), requiredText(value?.displayName, 'Display name')]
       );
@@ -398,6 +401,42 @@ export const createPostgresAuthRepository = ({ database }) => {
         });
       }
       return toRegisteredAccount(result.rows[0]);
+    };
+
+    /** @param {{ userId: string, codeHash: string, expiresAt: number | Date }} value */
+    const createEmailVerificationCode = async ({ userId, codeHash, expiresAt }) => {
+      const expiry = validTime(expiresAt, 'Verification code expiry');
+      if (expiry <= Date.now()) throw new ValidationError('Verification code expiry must be in the future.');
+      const accountId = requiredText(userId, 'User id');
+      await queryable.query(
+        `UPDATE email_verification_codes SET consumed_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1 AND consumed_at IS NULL`,
+        [accountId]
+      );
+      await queryable.query(
+        `INSERT INTO email_verification_codes (id, user_id, code_hash, expires_at)
+         VALUES ($1, $2, $3, $4::TIMESTAMPTZ)`,
+        [crypto.randomUUID(), accountId, normalizeTokenHash(codeHash), new Date(expiry).toISOString()]
+      );
+    };
+
+    /** @param {{ email: string, codeHash: string }} value */
+    const verifyEmailCode = async ({ email, codeHash }) => {
+      const result = await queryable.query(
+        `WITH verified AS (
+           UPDATE email_verification_codes AS code SET consumed_at = CURRENT_TIMESTAMP
+           FROM users AS account
+           WHERE code.user_id = account.id AND lower(account.email) = $1
+             AND code.code_hash = $2 AND code.consumed_at IS NULL AND code.expires_at > CURRENT_TIMESTAMP
+           RETURNING account.id
+         )
+         UPDATE users AS account SET email_verified_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         FROM verified WHERE account.id = verified.id
+         RETURNING account.id, account.email, account.username, account.display_name, account.avatar_url,
+                   account.provider, account.role, account.email_verified_at, account.created_at, account.registered_at`,
+        [normalizeEmail(email), normalizeTokenHash(codeHash)]
+      );
+      return result.rows[0] ? toRegisteredAccount(/** @type {RegisteredAccountRow} */ (result.rows[0])) : null;
     };
 
     /** @type {PostgresAuthRepository} */
@@ -417,7 +456,9 @@ export const createPostgresAuthRepository = ({ database }) => {
       revokeSession,
       revokeSessionByTokenHash,
       claimGuestSubmissions,
-      updateUserProfile
+      updateUserProfile,
+      createEmailVerificationCode,
+      verifyEmailCode
     };
     return Object.freeze(repository);
   };

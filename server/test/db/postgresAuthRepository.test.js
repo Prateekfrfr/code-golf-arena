@@ -162,6 +162,7 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
           }]
         };
       }
+      if (text.includes('email_verification_codes')) return { rows: [] };
       if (text.includes("account_kind = 'registered'")) return { rows: [{ id: ids.account }] };
       if (text.includes("account_kind = 'guest'")) return { rows: [] };
       if (text.startsWith('INSERT INTO auth_sessions')) {
@@ -196,7 +197,8 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
   const service = createAuthService({
     repository: createPostgresAuthRepository({ database }),
     logger: { info: () => {} },
-    now: () => Date.now()
+    now: () => Date.now(),
+    mailer: { sendVerificationCode: async () => {} }
   });
   const registered = await service.register({
     email: 'Member@Example.com',
@@ -206,9 +208,7 @@ test('PostgreSQL auth repository satisfies the service contract within one scope
   });
 
   assert.equal(transactions, 1);
-  assert.equal(registered.user.displayName, 'Member One');
-  assert.equal(registered.user.username, 'member-one');
-  assert.equal(registered.user.passwordHash, undefined);
-  assert.equal(calls.some((call) => call.text.startsWith('INSERT INTO auth_sessions')), true);
-  assert.equal(calls[1].values[3], 'Member One');
+  assert.equal(registered.email, 'member@example.com');
+  assert.equal(registered.verificationRequired, true);
+  assert.equal(calls.some((call) => call.text.includes('email_verification_codes')), true);
 });

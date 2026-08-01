@@ -8,6 +8,7 @@
  * @property {'credentials'} [provider]
  * @property {'user' | 'problem_setter' | 'moderator' | 'admin'} [role]
  * @property {Date | string} [createdAt]
+ * @property {number | null} [emailVerifiedAt]
  */
 
 /**
@@ -28,6 +29,8 @@
  * @property {(secretDigest: string) => Promise<void>} revokeSession
  * @property {(input: { guestId: string, userId: string }) => Promise<void>} claimGuestSubmissions
  * @property {(input: { userId: string, displayName: string }) => Promise<AuthUser>} updateUserProfile
+ * @property {(input: { userId: string, codeHash: string, expiresAt: Date }) => Promise<void>} createEmailVerificationCode
+ * @property {(input: { email: string, codeHash: string }) => Promise<AuthUser | null>} verifyEmailCode
  */
 
 const REQUIRED_METHODS = Object.freeze([
@@ -38,7 +41,9 @@ const REQUIRED_METHODS = Object.freeze([
   'getSessionUser',
   'revokeSession',
   'claimGuestSubmissions',
-  'updateUserProfile'
+  'updateUserProfile',
+  'createEmailVerificationCode',
+  'verifyEmailCode'
 ]);
 
 /** @param {unknown} value @returns {asserts value is AuthRepository} */

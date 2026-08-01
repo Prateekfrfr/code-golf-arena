@@ -29,7 +29,8 @@ import {
 import { AppError, ValidationError } from './errors/index.js';
 import {
   AuthenticationError,
-  createAuthService
+  createAuthService,
+  createVerificationMailer
 } from './auth/index.js';
 import {
   createSessionClearCookie,
@@ -163,11 +164,14 @@ const postgresProblemRepository = database
 const authRepository = database
   ? createPostgresAuthRepository({ database })
   : null;
-const authService = authRepository
+const verificationMailer = createVerificationMailer(serverConfig.mail);
+const authService = authRepository && verificationMailer
   ? createAuthService({
       repository: authRepository,
       sessionTtlMs: serverConfig.auth.sessionTtlMs,
-      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined
+      verificationCodeTtlMs: serverConfig.auth.verificationCodeTtlMs,
+      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined,
+      mailer: verificationMailer
     })
   : null;
 const leaderboardRepository = database
@@ -831,7 +835,7 @@ app.get('/health', (_request, response) => {
 
 const requirePersistentAccounts = (_request, response, next) => {
   if (!authService) {
-    response.status(503).json({ error: 'Accounts require PostgreSQL persistence.' });
+    response.status(503).json({ error: 'Accounts require PostgreSQL persistence and SMTP email configuration.' });
     return;
   }
   next();
@@ -893,6 +897,24 @@ app.post('/api/auth/login', limitAuthentication, requirePersistentAccounts, asyn
     const session = await authService.login(request.body);
     setSessionCookie(response, session.sessionSecret, session.expiresAt);
     response.json({ user: session.user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/verify-email', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
+  try {
+    const session = await authService.verifyEmail(request.body);
+    setSessionCookie(response, session.sessionSecret, session.expiresAt);
+    response.json({ user: session.user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/resend-verification', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
+  try {
+    response.json(await authService.resendVerification(request.body));
   } catch (error) {
     next(error);
   }
@@ -1242,8 +1264,27 @@ const pruneInterval = typeof socketRateLimiter.prune === 'function'
   : null;
 pruneInterval?.unref();
 
-httpServer.listen(serverConfig.port, () => {
-  logger.info('server.listening', { port: serverConfig.port });
+const start = async () => {
+    console.log({
+    user: process.env.MAIL_USER,
+    passLength: process.env.MAIL_PASSWORD?.length,
+  });
+  console.log({
+  pass: JSON.stringify(process.env.MAIL_PASSWORD),
+  passLength: process.env.MAIL_PASSWORD?.length,
+});
+  if (verificationMailer) await verificationMailer.verify();
+  httpServer.listen(serverConfig.port, () => {
+    logger.info('server.listening', { port: serverConfig.port });
+  });
+};
+
+start().catch((error) => {
+  console.error("\n========== STARTUP ERROR ==========");
+  console.error(error);
+  console.error(error?.stack);
+  console.error("===================================\n");
+  process.exit(1);
 });
 
 const shutdown = () => {

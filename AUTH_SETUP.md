@@ -19,6 +19,13 @@ NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
 AUTH_SESSION_COOKIE_NAME=cga_session
 AUTH_SESSION_TTL_MS=604800000
 AUTH_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+MAIL_HOST=smtp.gmail.com
+MAIL_PORT=465
+MAIL_SECURE=true
+MAIL_USER=you@gmail.com
+MAIL_PASSWORD=your-google-app-password
+MAIL_FROM="Code Golf Arena <you@gmail.com>"
+APP_URL=https://arena.example.com
 ```
 
 `AUTH_BOOTSTRAP_ADMIN_EMAIL` is optional. When set, the first account
@@ -26,6 +33,16 @@ registered with that exact email receives the `admin` role. Remove the value
 after creating the account. Never use it as a permanent authorization secret.
 
 No OAuth client IDs, provider secrets, or external callback URLs are required.
+
+Email verification is required for new registrations. The server sends a six-digit
+OTP after registration and only creates a session after it is verified. In
+production all `MAIL_*` values and `APP_URL` are required; startup verifies the
+SMTP connection and fails with a clear error if it cannot connect.
+
+For Gmail, enable two-step verification on the sending Google account, create a
+Google **App Password** for Mail, and use that 16-character app password for
+`MAIL_PASSWORD`—do not use the normal Gmail password. Use port `465` with
+`MAIL_SECURE=true` (or port `587` with `MAIL_SECURE=false`).
 
 ## 2. Apply migrations and seed problems
 

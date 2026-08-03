@@ -37,7 +37,8 @@ import {
   createSessionSetCookie,
   readSessionCookie
 } from './auth/httpCookies.js';
-import { judgeSubmission } from './judge.js';
+import { toNodeHandler } from 'better-auth/node';
+import { auth } from './auth/betterAuth.js';
 import {
   createDatabaseProblemProvider,
   createProblemProvider
@@ -98,8 +99,36 @@ app.use((request, response, next) => {
   }
   next();
 });
+app.use('/api/auth', (request, response, next) => {
+  toNodeHandler(auth)(request, response)
+    .then(() => {
+      if (!response.headersSent) next();
+    })
+    .catch(next);
+});
+
 app.use(async (request, _response, next) => {
   request.authUser = null;
+  try {
+    const sessionRes = await auth.api.getSession({ headers: request.headers });
+    if (sessionRes?.user) {
+      request.authUser = {
+        id: sessionRes.user.id,
+        email: sessionRes.user.email,
+        username: sessionRes.user.username || sessionRes.user.name || sessionRes.user.email.split('@')[0],
+        displayName: sessionRes.user.name || sessionRes.user.display_name || sessionRes.user.email,
+        avatar: sessionRes.user.image || sessionRes.user.avatar_url || null,
+        provider: sessionRes.user.provider || 'credentials',
+        role: sessionRes.user.role || 'user',
+        createdAt: sessionRes.user.createdAt ? new Date(sessionRes.user.createdAt).getTime() : Date.now()
+      };
+      next();
+      return;
+    }
+  } catch (_err) {
+    // Fall back to legacy session lookup
+  }
+
   const sessionSecret = readSessionCookie(
     request.get('cookie'),
     serverConfig.auth.sessionCookieName
@@ -687,6 +716,22 @@ io.use((socket, next) => {
   );
   Promise.resolve()
     .then(async () => {
+      try {
+        const sessionRes = await auth.api.getSession({ headers: socket.handshake.headers });
+        if (sessionRes?.user) {
+          return {
+            id: sessionRes.user.id,
+            email: sessionRes.user.email,
+            username: sessionRes.user.username || sessionRes.user.name || sessionRes.user.email.split('@')[0],
+            displayName: sessionRes.user.name || sessionRes.user.display_name || sessionRes.user.email,
+            avatar: sessionRes.user.image || sessionRes.user.avatar_url || null,
+            provider: sessionRes.user.provider || 'credentials',
+            role: sessionRes.user.role || 'user'
+          };
+        }
+      } catch (_e) {
+        // Fall back to legacy lookup
+      }
       if (!authService || !sessionSecret) return null;
       try {
         return await authService.getSessionUser(sessionSecret);

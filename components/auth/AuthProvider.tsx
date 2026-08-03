@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiRequest, ApiError } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import type { AuthUser } from "@/types/domain";
 
 type AuthContextValue = {
@@ -25,6 +26,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const { data: sessionData, isPending: sessionPending } = authClient.useSession();
 
   const refresh = useCallback(async () => {
     try {
@@ -42,23 +45,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    apiRequest<{ user: AuthUser }>("/api/auth/me")
-      .then((result) => {
-        if (active) setUser(result.user);
-      })
-      .catch(() => {
-        if (active) setUser(null);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    if (sessionData?.user) {
+      const mappedUser: AuthUser = {
+        id: sessionData.user.id,
+        email: sessionData.user.email,
+        username:
+          (sessionData.user as { username?: string }).username ??
+          sessionData.user.name ??
+          sessionData.user.email.split("@")[0],
+        displayName: sessionData.user.name ?? sessionData.user.email,
+        avatar: sessionData.user.image ?? null,
+        provider: "credentials",
+        role:
+          ((sessionData.user as { role?: AuthUser["role"] }).role as AuthUser["role"]) ??
+          "user",
+      };
+      setUser(mappedUser);
+      setLoading(false);
+      return;
+    }
+
+    if (!sessionPending) {
+      apiRequest<{ user: AuthUser }>("/api/auth/me")
+        .then((result) => {
+          if (active) setUser(result.user);
+        })
+        .catch(() => {
+          if (active) setUser(null);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    }
+
     return () => {
       active = false;
     };
-  }, []);
+  }, [sessionData, sessionPending]);
 
   const logout = useCallback(async () => {
-    await apiRequest<void>("/api/auth/logout", { method: "POST" });
+    try {
+      await authClient.signOut();
+    } catch {
+      // Ignore
+    }
+    try {
+      await apiRequest<void>("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Ignore
+    }
     setUser(null);
   }, []);
 
@@ -81,3 +116,4 @@ export const canAuthorProblems = (user: AuthUser | null) =>
     user &&
       ["problem_setter", "moderator", "admin"].includes(user.role),
   );
+

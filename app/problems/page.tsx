@@ -14,7 +14,7 @@ import type { Language, Problem } from "@/types/domain";
 
 const PAGE_SIZE = 12;
 const apiBase =
-  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 type ProblemResponse = {
   items: Problem[];

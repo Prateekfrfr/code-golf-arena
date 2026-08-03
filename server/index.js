@@ -1265,18 +1265,16 @@ const pruneInterval = typeof socketRateLimiter.prune === 'function'
 pruneInterval?.unref();
 
 const start = async () => {
-    console.log({
-    user: process.env.MAIL_USER,
-    passLength: process.env.MAIL_PASSWORD?.length,
-  });
-  console.log({
-  pass: JSON.stringify(process.env.MAIL_PASSWORD),
-  passLength: process.env.MAIL_PASSWORD?.length,
-});
-  if (verificationMailer) await verificationMailer.verify();
   httpServer.listen(serverConfig.port, () => {
     logger.info('server.listening', { port: serverConfig.port });
   });
+  if (verificationMailer) {
+    verificationMailer.verify()
+      .then(() => logger.info('smtp.verification.succeeded'))
+      .catch((error) => logger.error('smtp.verification.failed', { error }));
+  } else {
+    logger.warn('smtp.verification.skipped', { reason: 'SMTP is not configured.' });
+  }
 };
 
 start().catch((error) => {

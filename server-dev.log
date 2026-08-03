@@ -1,0 +1,6 @@
+
+> code-golf-arena@0.1.0 dev:server
+> node --env-file=.env server/index.js
+
+{"timestamp":"2026-08-03T11:35:26.968Z","level":"info","service":"code-golf-arena","event":"server.listening","correlationId":"17d11468-b1b5-42a3-93e1-e2c377a29fc0","port":3001}
+{"timestamp":"2026-08-03T11:37:25.995Z","level":"error","service":"code-golf-arena","event":"smtp.verification.failed","correlationId":"ece3fa83-733b-4bcb-9dd5-98a0e34db155","error":{"name":"UnexpectedError"}}

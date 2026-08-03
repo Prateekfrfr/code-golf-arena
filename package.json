@@ -8,11 +8,11 @@
     "node": ">=20.9 <25"
   },
   "scripts": {
-    "dev": "next dev",
-    "dev:server": "npm --prefix server start",
+    "dev": "next dev --port 3005",
+    "dev:server": "node --env-file=.env server/index.js",
     "check:server": "npm --prefix server run check",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 3005",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "typecheck:server": "npm --prefix server run typecheck",

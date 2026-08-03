@@ -71,7 +71,7 @@ Install and configure:
 ```bash
 npm ci
 npm --prefix server ci
-copy .env.example .env.local
+copy .env.example .env
 ```
 
 Run the backend and frontend in separate terminals:
@@ -81,7 +81,7 @@ npm run dev:server
 npm run dev
 ```
 
-Open `http://localhost:3000`. The backend listens on
+Open `http://localhost:3005`. The backend listens on
 `http://localhost:3001` by default.
 
 The executor downloads configured language images on first use. Production

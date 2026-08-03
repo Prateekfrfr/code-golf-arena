@@ -7,13 +7,14 @@ cookies, and PostgreSQL stores only SHA-256 session digests.
 
 ## 1. Configure the environment
 
-Copy `.env.example` to `.env.local` for Next.js and load the same values in the
-server process:
+Copy `.env.example` to `.env`; both development processes read it:
 
 ```env
 PERSISTENCE_MODE=postgres
 DATABASE_URL=postgresql://codegolf:change-me@localhost:5432/codegolf
-CORS_ORIGINS=http://localhost:3000
+BACKEND_PORT=3001
+CORS_ORIGINS=http://localhost:3005
+NEXT_PUBLIC_API_URL=http://localhost:3001
 NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
 
 AUTH_SESSION_COOKIE_NAME=cga_session

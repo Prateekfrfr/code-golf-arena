@@ -78,6 +78,7 @@ async function runE2E() {
     provider: "google",
     callbackURL: "http://localhost:3005/",
   });
+  if (socialRes.error) throw new Error(socialRes.error.message || 'Google OAuth URL generation failed.');
   console.log("Google OAuth Authorization Endpoint invoked cleanly!");
 
   // 5. Better Auth Sign Out

@@ -9,7 +9,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiRequest, ApiError } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import type { AuthUser } from "@/types/domain";
 
@@ -25,63 +24,48 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const { data: sessionData, isPending: sessionPending } = authClient.useSession();
 
+  const toAuthUser = useCallback((sessionUser: NonNullable<typeof sessionData>["user"]): AuthUser => ({
+    id: sessionUser.id,
+    email: sessionUser.email,
+    username:
+      (sessionUser as { username?: string }).username ??
+      sessionUser.name ??
+      sessionUser.email.split("@")[0],
+    displayName: sessionUser.name ?? sessionUser.email,
+    avatar: sessionUser.image ?? null,
+    provider: ((sessionUser as { provider?: AuthUser["provider"] }).provider ?? "credentials"),
+    role:
+      ((sessionUser as { role?: AuthUser["role"] }).role as AuthUser["role"]) ??
+      "user",
+  }), []);
+
   const refresh = useCallback(async () => {
-    try {
-      const result = await apiRequest<{ user: AuthUser }>("/api/auth/me");
-      setUser(result.user);
-      return result.user;
-    } catch (error) {
-      if (error instanceof ApiError && (error.status === 401 || error.status === 503)) {
-        setUser(null);
-        return null;
-      }
-      throw error;
+    const result = await authClient.getSession();
+    if (!result.data?.user) {
+      setUser(null);
+      return null;
     }
-  }, []);
+    const mappedUser = toAuthUser(result.data.user);
+    setUser(mappedUser);
+    return mappedUser;
+  }, [toAuthUser]);
 
   useEffect(() => {
+    // The Better Auth React store is the source of truth and broadcasts
+    // sign-in/sign-out changes. Defer the derived React state update so this
+    // effect stays a subscription synchronization rather than a render loop.
+    if (sessionPending) return;
     let active = true;
-    if (sessionData?.user) {
-      const mappedUser: AuthUser = {
-        id: sessionData.user.id,
-        email: sessionData.user.email,
-        username:
-          (sessionData.user as { username?: string }).username ??
-          sessionData.user.name ??
-          sessionData.user.email.split("@")[0],
-        displayName: sessionData.user.name ?? sessionData.user.email,
-        avatar: sessionData.user.image ?? null,
-        provider: "credentials",
-        role:
-          ((sessionData.user as { role?: AuthUser["role"] }).role as AuthUser["role"]) ??
-          "user",
-      };
-      setUser(mappedUser);
-      setLoading(false);
-      return;
-    }
-
-    if (!sessionPending) {
-      apiRequest<{ user: AuthUser }>("/api/auth/me")
-        .then((result) => {
-          if (active) setUser(result.user);
-        })
-        .catch(() => {
-          if (active) setUser(null);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    }
-
+    Promise.resolve().then(() => {
+      if (active) setUser(sessionData?.user ? toAuthUser(sessionData.user) : null);
+    });
     return () => {
       active = false;
     };
-  }, [sessionData, sessionPending]);
+  }, [sessionData, sessionPending, toAuthUser]);
 
   const logout = useCallback(async () => {
     try {
@@ -93,8 +77,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, refresh, setUser, logout }),
-    [loading, logout, refresh, user],
+    () => ({ user, loading: sessionPending, refresh, setUser, logout }),
+    [logout, refresh, sessionPending, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

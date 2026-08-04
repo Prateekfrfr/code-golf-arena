@@ -45,8 +45,6 @@ const ephemeralStateMode = readString('EPHEMERAL_STATE_MODE', 'memory', {
 });
 const databaseUrl = readString('DATABASE_URL', '', { max: 4_000 });
 const redisUrl = readString('REDIS_URL', '', { max: 4_000 });
-const appUrl = readString('APP_URL', '', { max: 2_000 });
-
 if (persistenceMode === 'postgres' && !databaseUrl) {
   throw new Error(
     formatMissingEnvError('DATABASE_URL', 'required when PERSISTENCE_MODE is postgres')
@@ -116,19 +114,6 @@ export const serverConfig = Object.freeze({
       min: 1_000,
       max: 60_000
     })
-  }),
-  auth: Object.freeze({
-    sessionCookieName: readString('AUTH_SESSION_COOKIE_NAME', 'cga_session', {
-      max: 80,
-      pattern: /^[a-zA-Z0-9_-]+$/
-    }),
-    sessionTtlMs: readInteger('AUTH_SESSION_TTL_MS', 7 * 24 * 60 * 60 * 1_000, {
-      min: 60 * 60 * 1_000,
-      max: 90 * 24 * 60 * 60 * 1_000
-    }),
-    bootstrapAdminEmail: readString('AUTH_BOOTSTRAP_ADMIN_EMAIL', '', {
-      max: 320
-    }).toLowerCase()
   }),
   database: Object.freeze({
     url: databaseUrl,

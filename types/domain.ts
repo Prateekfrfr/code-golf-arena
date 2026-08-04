@@ -62,7 +62,7 @@ export interface AuthUser {
   email: string;
   displayName: string;
   avatar: string | null;
-  provider: "credentials";
+    provider: "credentials" | "google";
   role: AccountRole;
   createdAt?: number;
 }

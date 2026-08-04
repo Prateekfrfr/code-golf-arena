@@ -19,25 +19,14 @@ import { buildSubmissionAnalytics } from './analytics/summaryBuilder.js';
 import { createDefaultCompressionAnalyzerRegistry } from './compression/index.js';
 import { isAllowedOrigin, serverConfig } from './config.js';
 import { createExecutionQueue } from './execution/executionQueue.js';
-import { createPostgresDatabase } from './db/postgres.js';
 import {
   createPostgresProblemRepository,
   createPostgresSubmissionRepository,
-  createPostgresAuthRepository,
   createPostgresLeaderboardRepository
 } from './db/repositories/index.js';
 import { AppError, ValidationError } from './errors/index.js';
-import {
-  AuthenticationError,
-  createAuthService
-} from './auth/index.js';
-import {
-  createSessionClearCookie,
-  createSessionSetCookie,
-  readSessionCookie
-} from './auth/httpCookies.js';
 import { toNodeHandler } from 'better-auth/node';
-import { auth } from './auth/betterAuth.js';
+import { auth, authDatabase } from './auth/betterAuth.js';
 import {
   createDatabaseProblemProvider,
   createProblemProvider
@@ -66,7 +55,6 @@ import {
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '512kb', strict: true }));
 app.use((request, response, next) => {
   const correlationId = createCorrelationId();
   request.correlationId = correlationId;
@@ -86,6 +74,13 @@ app.use(
   })
 );
 app.use((request, response, next) => {
+  // Better Auth performs its own origin and callback validation. Applying the
+  // application's generic CSRF gate here would duplicate that policy and can
+  // block a provider POST callback before Better Auth validates its state.
+  if (request.path.startsWith('/api/auth/')) {
+    next();
+    return;
+  }
   const isStateChanging = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
   const origin = request.get('origin');
   const fetchSite = request.get('sec-fetch-site');
@@ -98,14 +93,17 @@ app.use((request, response, next) => {
   }
   next();
 });
+// Better Auth owns its complete namespace. CORS is already in place for the
+// frontend client, while its own handler parses authentication request bodies.
 app.use('/api/auth', (request, response, next) => {
+  response.set('Cache-Control', 'no-store');
   toNodeHandler(auth)(request, response)
     .then(() => {
       if (!response.headersSent) next();
     })
     .catch(next);
 });
-
+app.use(express.json({ limit: '512kb', strict: true }));
 app.use(async (request, _response, next) => {
   request.authUser = null;
   try {
@@ -121,29 +119,9 @@ app.use(async (request, _response, next) => {
         role: sessionRes.user.role || 'user',
         createdAt: sessionRes.user.createdAt ? new Date(sessionRes.user.createdAt).getTime() : Date.now()
       };
-      next();
-      return;
     }
-  } catch (_err) {
-    // Fall back to legacy session lookup
-  }
-
-  const sessionSecret = readSessionCookie(
-    request.get('cookie'),
-    serverConfig.auth.sessionCookieName
-  );
-  if (!authService || !sessionSecret) {
-    next();
-    return;
-  }
-  try {
-    request.authUser = await authService.getSessionUser(sessionSecret);
     next();
   } catch (error) {
-    if (error instanceof AuthenticationError || error instanceof ValidationError) {
-      next();
-      return;
-    }
     next(error);
   }
 });
@@ -178,26 +156,9 @@ const roomRepository = redisBoundary
   : createInMemoryRoomRepository();
 const replayRepository = createReplayRepository();
 const scoreRepository = createScoreRepository();
-const database = serverConfig.persistenceMode === 'postgres'
-  ? createPostgresDatabase({
-      connectionString: serverConfig.database.url,
-      max: serverConfig.database.poolMax,
-      idleTimeoutMs: serverConfig.database.idleTimeoutMs,
-      connectionTimeoutMs: serverConfig.database.connectionTimeoutMs
-    })
-  : null;
+const database = authDatabase;
 const postgresProblemRepository = database
   ? createPostgresProblemRepository({ database })
-  : null;
-const authRepository = database
-  ? createPostgresAuthRepository({ database })
-  : null;
-const authService = authRepository
-  ? createAuthService({
-      repository: authRepository,
-      sessionTtlMs: serverConfig.auth.sessionTtlMs,
-      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined
-    })
   : null;
 const leaderboardRepository = database
   ? createPostgresLeaderboardRepository({ database })
@@ -220,11 +181,6 @@ const socketRateLimiter = redisBoundary
       onError: (error) => logger.error('redis.rate_limit.failed', { error })
     })
   : createSocketRateLimiter();
-const authRateLimiter = createSocketRateLimiter({
-  rules: {
-    authentication: { limit: 10, windowMs: 15 * 60_000 }
-  }
-});
 const compressionAnalyzers = createDefaultCompressionAnalyzerRegistry();
 const antiCheatRuleEngine = createDefaultAntiCheatRuleEngine();
 const allowedAntiCheatTypes = new Set([
@@ -706,37 +662,19 @@ const runSocketHandler = (socket, label, handler) => {
 };
 
 io.use((socket, next) => {
-  const sessionSecret = readSessionCookie(
-    socket.handshake.headers.cookie,
-    serverConfig.auth.sessionCookieName
-  );
   Promise.resolve()
     .then(async () => {
-      try {
-        const sessionRes = await auth.api.getSession({ headers: socket.handshake.headers });
-        if (sessionRes?.user) {
-          return {
-            id: sessionRes.user.id,
-            email: sessionRes.user.email,
-            username: sessionRes.user.username || sessionRes.user.name || sessionRes.user.email.split('@')[0],
-            displayName: sessionRes.user.name || sessionRes.user.display_name || sessionRes.user.email,
-            avatar: sessionRes.user.image || sessionRes.user.avatar_url || null,
-            provider: sessionRes.user.provider || 'credentials',
-            role: sessionRes.user.role || 'user'
-          };
-        }
-      } catch (_e) {
-        // Fall back to legacy lookup
-      }
-      if (!authService || !sessionSecret) return null;
-      try {
-        return await authService.getSessionUser(sessionSecret);
-      } catch (error) {
-        if (error instanceof AuthenticationError || error instanceof ValidationError) {
-          return null;
-        }
-        throw error;
-      }
+      const sessionRes = await auth.api.getSession({ headers: socket.handshake.headers });
+      if (!sessionRes?.user) return null;
+      return {
+        id: sessionRes.user.id,
+        email: sessionRes.user.email,
+        username: sessionRes.user.username || sessionRes.user.name || sessionRes.user.email.split('@')[0],
+        displayName: sessionRes.user.name || sessionRes.user.display_name || sessionRes.user.email,
+        avatar: sessionRes.user.image || sessionRes.user.avatar_url || null,
+        provider: sessionRes.user.provider || 'credentials',
+        role: sessionRes.user.role || 'user'
+      };
     })
     .then((account) => {
       const guestId = String(socket.handshake.auth?.guestId || '').trim();
@@ -869,7 +807,7 @@ app.get('/health', (_request, response) => {
     executionQueue: executionQueue.getStats(),
     problemProvider: serverConfig.persistenceMode === 'postgres' ? 'postgres' : 'local',
     persistence: serverConfig.persistenceMode,
-    authentication: authService ? 'postgres-session' : 'guest-only',
+    authentication: 'better-auth-postgres',
     ephemeralState: serverConfig.ephemeralStateMode
   });
 });
@@ -893,23 +831,6 @@ const requireProblemAuthor = (request, response, next) => {
   }
   next();
 };
-
-app.get('/api/auth/me', requireAuthenticatedUser, (request, response) => {
-  response.json({ user: request.authUser });
-});
-
-app.patch('/api/auth/me', requireAuthenticatedUser, async (request, response, next) => {
-  try {
-    if (!authService) {
-      response.status(503).json({ error: 'Profile updates require database persistence.' });
-      return;
-    }
-    const user = await authService.updateProfile(request.authUser.id, request.body);
-    response.json({ user });
-  } catch (error) {
-    next(error);
-  }
-});
 
 const requirePersistentLeaderboards = (_request, response, next) => {
   if (!leaderboardRepository) {
@@ -962,7 +883,11 @@ app.get('/api/progress', requirePersistentLeaderboards, requireAuthenticatedUser
 const problemQueryForRequest = (request) => {
   const solved = String(request.query.solved || '').trim().toLowerCase();
   if (solved && !request.authUser) {
-    throw new AuthenticationError('Authentication is required for solved filtering.');
+    throw new AppError('Authentication is required for solved filtering.', {
+      code: 'AUTHENTICATION_REQUIRED',
+      statusCode: 401,
+      expose: true
+    });
   }
   return {
     search: request.query.search,

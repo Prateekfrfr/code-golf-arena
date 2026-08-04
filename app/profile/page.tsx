@@ -4,13 +4,12 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { PageState, PremiumShell, SurfaceCard, TopNav } from "@/components/ui/PremiumShell";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { apiRequest } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { socket } from "@/lib/socket";
-import type { AuthUser } from "@/types/domain";
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, loading, setUser, logout } = useAuth();
+  const { user, loading, refresh, setUser, logout } = useAuth();
   const [displayNameDraft, setDisplayNameDraft] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -22,12 +21,12 @@ export default function ProfilePage() {
     setPending(true);
     setMessage("");
     try {
-      const result = await apiRequest<{ user: AuthUser }>("/api/auth/me", {
-        method: "PATCH",
-        body: JSON.stringify({ displayName }),
-      });
-      setUser(result.user);
-      setDisplayNameDraft(result.user.displayName);
+      const result = await authClient.updateUser({ name: displayName });
+      if (result.error) throw new Error(result.error.message || "Profile could not be saved.");
+      const updatedUser = await refresh();
+      if (!updatedUser) throw new Error("Your session expired while saving your profile.");
+      setUser(updatedUser);
+      setDisplayNameDraft(updatedUser.displayName);
       setMessage("Profile saved.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Profile could not be saved.");

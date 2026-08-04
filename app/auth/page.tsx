@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { PremiumShell, SurfaceCard, TopNav } from "@/components/ui/PremiumShell";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { authClient } from "@/lib/auth-client";
-import { apiRequest } from "@/lib/api";
 import { socket } from "@/lib/socket";
 import type { AuthUser } from "@/types/domain";
 
@@ -20,6 +19,7 @@ export default function AuthPage() {
   const [googlePending, setGooglePending] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const googleFlowStarted = useRef(false);
 
   useEffect(() => {
     if (user) router.replace("/profile");
@@ -91,15 +91,22 @@ export default function AuthPage() {
   };
 
   const handleGoogleSignIn = async () => {
+    // A state record is intentionally single-use. Guard synchronously as well
+    // as visually so an impatient double click cannot start two OAuth flows.
+    if (googleFlowStarted.current) return;
+    googleFlowStarted.current = true;
     setGooglePending(true);
     setError("");
     try {
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: "/",
+        // OAuth callbacks are served by Express. A relative URL would resolve
+        // to localhost:3001 and produce "Cannot GET /" after success.
+        callbackURL: `${window.location.origin}/`,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google sign-in failed.");
+      googleFlowStarted.current = false;
       setGooglePending(false);
     }
   };

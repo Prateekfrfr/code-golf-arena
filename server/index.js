@@ -19,6 +19,7 @@ import { buildSubmissionAnalytics } from './analytics/summaryBuilder.js';
 import { createDefaultCompressionAnalyzerRegistry } from './compression/index.js';
 import { isAllowedOrigin, serverConfig } from './config.js';
 import { createExecutionQueue } from './execution/executionQueue.js';
+import { judgeSubmission } from './judge.js';
 import {
   createPostgresProblemRepository,
   createPostgresSubmissionRepository,
@@ -479,15 +480,47 @@ const handleRejoinRoom = async (socket, roomCodeInput) => {
   socket.emit(SocketEvents.ANTI_CHEAT_SUMMARY, buildAntiCheatSummary(room));
 };
 
+const serializeSubmitCodeError = (error, depth = 0) => {
+  if (depth >= 6 || error === null || error === undefined) return null;
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      ...(typeof error.code === 'string' ? { code: error.code } : {}),
+      cause: serializeSubmitCodeError(error.cause, depth + 1)
+    };
+  }
+  if (typeof error === 'object') {
+    const value = /** @type {{name?: unknown, message?: unknown, stack?: unknown, code?: unknown, cause?: unknown}} */ (error);
+    return {
+      ...(typeof value.name === 'string' ? { name: value.name } : {}),
+      ...(typeof value.message === 'string' ? { message: value.message } : {}),
+      ...(typeof value.stack === 'string' ? { stack: value.stack } : {}),
+      ...(typeof value.code === 'string' ? { code: value.code } : {}),
+      cause: serializeSubmitCodeError(value.cause, depth + 1)
+    };
+  }
+  return { message: String(error) };
+};
+
 const handleSubmitCode = async (socket, payload) => {
-  if (!(await consumeRateLimit(socket, 'submission'))) return;
+  let roomId = typeof payload?.roomCode === 'string' ? payload.roomCode : null;
+  let language = typeof payload?.language === 'string' ? payload.language : null;
+  let submissionId = null;
+  let userId = getAccountId(socket);
+  try {
+    if (!(await consumeRateLimit(socket, 'submission'))) return;
 
-  const submission = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
-  const { roomCode, room } = await getRoomOrError(socket, submission.roomCode);
-  if (!room) return;
+    const submission = parseCodeUpdate(payload, serverConfig.maxCodeBytes);
+    roomId = submission.roomCode;
+    language = submission.language;
+    const { roomCode, room } = await getRoomOrError(socket, submission.roomCode);
+    if (!room) return;
 
-  const playerId = getPlayerId(socket);
-  const accountId = getAccountId(socket);
+    const playerId = getPlayerId(socket);
+    const accountId = getAccountId(socket);
+    userId = accountId || playerId;
   if (!accountId) {
     socket.emit(SocketEvents.SUBMISSION_RESULT, {
       output: 'Sign in to submit code. Your editor remains available in guest mode.',
@@ -564,7 +597,7 @@ const handleSubmitCode = async (socket, payload) => {
   const compression = judgeResult.success
     ? compressionAnalyzers.analyze(submission.language, submission.code)
     : null;
-  const submissionId = crypto.randomUUID();
+  submissionId = crypto.randomUUID();
   const submittedAt = Date.now();
   const submissionRecord = {
     id: submissionId,
@@ -641,6 +674,18 @@ const handleSubmitCode = async (socket, payload) => {
       scoreRepository.getScores(room)
     );
   }
+  } catch (error) {
+    logger.error('socket.submit_code.failed', {
+      correlationId: socket.data.correlationId,
+      roomId,
+      socketId: socket.id,
+      userId,
+      language,
+      submissionId,
+      errorDetails: serializeSubmitCodeError(error)
+    });
+    throw error;
+  }
 };
 
 const runSocketHandler = (socket, label, handler) => {
@@ -652,11 +697,16 @@ const runSocketHandler = (socket, label, handler) => {
         return;
       }
 
-      logger.error('socket.handler.failed', {
-        correlationId: socket.data.correlationId,
-        handler: label,
-        error
-      });
+      // handleSubmitCode already logs a structured, recursive diagnostic with
+      // the room/socket/submission context. Avoid replacing it with a second
+      // generic UnexpectedError record.
+      if (label !== 'submit-code') {
+        logger.error('socket.handler.failed', {
+          correlationId: socket.data.correlationId,
+          handler: label,
+          error
+        });
+      }
       emitRoomError(socket, 'The request could not be completed.');
     });
 };

@@ -29,8 +29,7 @@ import {
 import { AppError, ValidationError } from './errors/index.js';
 import {
   AuthenticationError,
-  createAuthService,
-  createVerificationMailer
+  createAuthService
 } from './auth/index.js';
 import {
   createSessionClearCookie,
@@ -193,14 +192,11 @@ const postgresProblemRepository = database
 const authRepository = database
   ? createPostgresAuthRepository({ database })
   : null;
-const verificationMailer = createVerificationMailer(serverConfig.mail);
-const authService = authRepository && verificationMailer
+const authService = authRepository
   ? createAuthService({
       repository: authRepository,
       sessionTtlMs: serverConfig.auth.sessionTtlMs,
-      verificationCodeTtlMs: serverConfig.auth.verificationCodeTtlMs,
-      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined,
-      mailer: verificationMailer
+      bootstrapAdminEmail: serverConfig.auth.bootstrapAdminEmail || undefined
     })
   : null;
 const leaderboardRepository = database
@@ -878,14 +874,6 @@ app.get('/health', (_request, response) => {
   });
 });
 
-const requirePersistentAccounts = (_request, response, next) => {
-  if (!authService) {
-    response.status(503).json({ error: 'Accounts require PostgreSQL persistence and SMTP email configuration.' });
-    return;
-  }
-  next();
-};
-
 const requireAuthenticatedUser = (request, response, next) => {
   if (!request.authUser) {
     response.status(401).json({ error: 'Authentication is required.' });
@@ -906,111 +894,16 @@ const requireProblemAuthor = (request, response, next) => {
   next();
 };
 
-const setSessionCookie = (response, sessionSecret, expiresAt) => {
-  response.set('Set-Cookie', createSessionSetCookie({
-    cookieName: serverConfig.auth.sessionCookieName,
-    sessionSecret,
-    expiresAt,
-    secure: process.env.NODE_ENV === 'production'
-  }));
-};
-
-const limitAuthentication = async (request, response, next) => {
-  const result = await authRateLimiter.consume(request.ip || 'unknown', 'authentication');
-  if (!result.allowed) {
-    response
-      .status(429)
-      .set('Retry-After', String(Math.ceil(result.retryAfterMs / 1_000)))
-      .json({ error: 'Too many authentication attempts. Try again later.' });
-    return;
-  }
-  next();
-};
-
-app.post('/api/auth/register', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
-  try {
-    const session = await authService.register(request.body);
-    setSessionCookie(response, session.sessionSecret, session.expiresAt);
-    response.status(201).json({ user: session.user });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/auth/login', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
-  try {
-    const session = await authService.login(request.body);
-    setSessionCookie(response, session.sessionSecret, session.expiresAt);
-    response.json({ user: session.user });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/auth/verify-email', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
-  try {
-    const session = await authService.verifyEmail(request.body);
-    setSessionCookie(response, session.sessionSecret, session.expiresAt);
-    response.json({ user: session.user });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/auth/resend-verification', limitAuthentication, requirePersistentAccounts, async (request, response, next) => {
-  try {
-    response.json(await authService.resendVerification(request.body));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/auth/logout', requirePersistentAccounts, async (request, response, next) => {
-  try {
-    const sessionSecret = readSessionCookie(
-      request.get('cookie'),
-      serverConfig.auth.sessionCookieName
-    );
-    if (sessionSecret) {
-      try {
-        await authService.logout(sessionSecret);
-      } catch (error) {
-        if (!(error instanceof AuthenticationError || error instanceof ValidationError)) {
-          throw error;
-        }
-      }
-    }
-    response.set('Set-Cookie', createSessionClearCookie({
-      cookieName: serverConfig.auth.sessionCookieName,
-      secure: process.env.NODE_ENV === 'production'
-    }));
-    response.status(204).end();
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/auth/refresh', requirePersistentAccounts, requireAuthenticatedUser, async (request, response, next) => {
-  try {
-    const sessionSecret = readSessionCookie(
-      request.get('cookie'),
-      serverConfig.auth.sessionCookieName
-    );
-    if (!sessionSecret) throw new AuthenticationError();
-    const session = await authService.refresh(sessionSecret);
-    setSessionCookie(response, session.sessionSecret, session.expiresAt);
-    response.json({ user: session.user });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get('/api/auth/me', requirePersistentAccounts, requireAuthenticatedUser, (request, response) => {
+app.get('/api/auth/me', requireAuthenticatedUser, (request, response) => {
   response.json({ user: request.authUser });
 });
 
-app.patch('/api/auth/me', requirePersistentAccounts, requireAuthenticatedUser, async (request, response, next) => {
+app.patch('/api/auth/me', requireAuthenticatedUser, async (request, response, next) => {
   try {
+    if (!authService) {
+      response.status(503).json({ error: 'Profile updates require database persistence.' });
+      return;
+    }
     const user = await authService.updateProfile(request.authUser.id, request.body);
     response.json({ user });
   } catch (error) {
@@ -1313,13 +1206,6 @@ const start = async () => {
   httpServer.listen(serverConfig.port, () => {
     logger.info('server.listening', { port: serverConfig.port });
   });
-  if (verificationMailer) {
-    verificationMailer.verify()
-      .then(() => logger.info('smtp.verification.succeeded'))
-      .catch((error) => logger.error('smtp.verification.failed', { error }));
-  } else {
-    logger.warn('smtp.verification.skipped', { reason: 'SMTP is not configured.' });
-  }
 };
 
 start().catch((error) => {

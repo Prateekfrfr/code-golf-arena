@@ -89,11 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore
     }
-    try {
-      await apiRequest<void>("/api/auth/logout", { method: "POST" });
-    } catch {
-      // Ignore
-    }
     setUser(null);
   }, []);
 

@@ -54,7 +54,6 @@ export const createAuthService = (options) => {
   const sessionTtlMs = options.sessionTtlMs ?? 1000 * 60 * 60 * 24 * 30;
   const verificationCodeTtlMs = options.verificationCodeTtlMs ?? 10 * 60_000;
   const mailer = options.mailer;
-  if (!mailer?.sendVerificationCode) throw new TypeError('An email verification mailer is required.');
   const bootstrapAdminEmail = options.bootstrapAdminEmail
     ? normalizeEmail(options.bootstrapAdminEmail)
     : null;
@@ -89,7 +88,7 @@ export const createAuthService = (options) => {
         logger.info('auth.registration.completed', { userId: user.id });
         return { email: user.email, code };
       }));
-      await mailer.sendVerificationCode(pending);
+      if (mailer) await mailer.sendVerificationCode(pending);
       return { verificationRequired: true, email: pending.email };
     },
 
@@ -139,7 +138,7 @@ export const createAuthService = (options) => {
         codeHash: digestVerificationCode(code),
         expiresAt: new Date(now() + verificationCodeTtlMs)
       });
-      await mailer.sendVerificationCode({ email: user.email, code });
+      if (mailer) await mailer.sendVerificationCode({ email: user.email, code });
       logger.info('auth.email.verification_resent', { userId: user.id });
       return { accepted: true };
     },

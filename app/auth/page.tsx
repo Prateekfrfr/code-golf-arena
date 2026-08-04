@@ -40,20 +40,6 @@ export default function AuthPage() {
         });
 
         if (res.error) {
-          try {
-            const legacyRes = await apiRequest<{ user?: AuthUser }>("/api/auth/register", {
-              method: "POST",
-              body: JSON.stringify({ email, password, displayName }),
-            });
-            if (legacyRes.user) {
-              setUser(legacyRes.user);
-              socket.disconnect().connect();
-              router.replace("/");
-              return;
-            }
-          } catch {
-            // Ignore fallback
-          }
           throw new Error(res.error.message || "Registration failed.");
         }
 
@@ -75,20 +61,6 @@ export default function AuthPage() {
         });
 
         if (res.error) {
-          try {
-            const legacyRes = await apiRequest<{ user?: AuthUser }>("/api/auth/login", {
-              method: "POST",
-              body: JSON.stringify({ email, password }),
-            });
-            if (legacyRes.user) {
-              setUser(legacyRes.user);
-              socket.disconnect().connect();
-              router.replace("/");
-              return;
-            }
-          } catch {
-            // Ignore fallback
-          }
           throw new Error(res.error.message || "Sign in failed.");
         }
 

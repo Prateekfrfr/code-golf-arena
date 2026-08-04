@@ -45,26 +45,8 @@ const ephemeralStateMode = readString('EPHEMERAL_STATE_MODE', 'memory', {
 });
 const databaseUrl = readString('DATABASE_URL', '', { max: 4_000 });
 const redisUrl = readString('REDIS_URL', '', { max: 4_000 });
-const mailHost = readString('MAIL_HOST', '', { max: 255 });
-const mailPort = readInteger('MAIL_PORT', 587, { min: 1, max: 65535 });
-const mailUser = readString('MAIL_USER', '', { max: 320 });
-const mailPassword = String(process.env.MAIL_PASSWORD ?? '');
-const mailFrom = readString('MAIL_FROM', '', { max: 320 });
 const appUrl = readString('APP_URL', '', { max: 2_000 });
-const mailConfigured = Boolean(mailHost && mailUser && mailPassword && mailFrom && appUrl);
-const mailValues = [mailHost, mailUser, mailPassword, mailFrom, appUrl];
-const hasMailConfiguration = mailValues.some(Boolean);
-if (mailPassword === 'your_16_character_app_password') {
-  throw new Error(
-    `MAIL_PASSWORD contains the placeholder value. Set a Gmail App Password in ${process.env.NODE_ENV === 'production' ? 'your deployment environment' : 'project-root/.env'} instead.`
-  );
-}
-if (hasMailConfiguration && !mailConfigured) {
-  throw new Error(formatMissingEnvError(
-    'MAIL_HOST, MAIL_USER, MAIL_PASSWORD, MAIL_FROM, APP_URL',
-    'all are required together when SMTP is configured'
-  ));
-}
+
 if (persistenceMode === 'postgres' && !databaseUrl) {
   throw new Error(
     formatMissingEnvError('DATABASE_URL', 'required when PERSISTENCE_MODE is postgres')
@@ -74,9 +56,6 @@ if (ephemeralStateMode === 'redis' && !redisUrl) {
   throw new Error(
     formatMissingEnvError('REDIS_URL', 'required when EPHEMERAL_STATE_MODE is redis')
   );
-}
-if (process.env.NODE_ENV === 'production' && !mailConfigured) {
-  throw new Error(formatMissingEnvError('MAIL_HOST, MAIL_USER, MAIL_PASSWORD, MAIL_FROM, APP_URL', 'all are required in production for email verification'));
 }
 
 /** @returns {string[]} */
@@ -149,21 +128,7 @@ export const serverConfig = Object.freeze({
     }),
     bootstrapAdminEmail: readString('AUTH_BOOTSTRAP_ADMIN_EMAIL', '', {
       max: 320
-    }).toLowerCase(),
-    verificationCodeTtlMs: readInteger('AUTH_VERIFICATION_CODE_TTL_MS', 10 * 60 * 1_000, {
-      min: 60_000,
-      max: 60 * 60 * 1_000
-    })
-  }),
-  mail: Object.freeze({
-    configured: mailConfigured,
-    host: mailHost,
-    port: mailPort,
-    secure: String(process.env.MAIL_SECURE ?? '').trim().toLowerCase() === 'true',
-    user: mailUser,
-    password: mailPassword,
-    from: mailFrom,
-    appUrl
+    }).toLowerCase()
   }),
   database: Object.freeze({
     url: databaseUrl,

@@ -2,7 +2,6 @@ import Docker from 'dockerode';
 import { PassThrough } from 'stream';
 import { performance } from 'node:perf_hooks';
 import { serverConfig } from './config.js';
-import { logger } from './observability/logger.js';
 
 const dockerClient = new Docker({
   socketPath: '//./pipe/docker_engine'
@@ -35,7 +34,7 @@ const languageConfigs = {
     env: (code, input) => [sourceEnv(code), inputEnv(input)]
   },
   cpp: {
-    image: process.env.EXECUTOR_CPP_IMAGE || 'gcc:14.2',
+    image: process.env.EXECUTOR_CPP_IMAGE || 'gcc:14-bookworm',
     cmd: () => [
       'sh',
       '-lc',
@@ -44,7 +43,7 @@ const languageConfigs = {
     env: (code, input) => [sourceEnv(code), inputEnv(input)]
   },
   java: {
-    image: process.env.EXECUTOR_JAVA_IMAGE || 'eclipse-temurin:21-jdk-alpine',
+    image: process.env.EXECUTOR_JAVA_IMAGE || 'eclipse-temurin:21-jdk',
     cmd: () => [
       'sh',
       '-lc',
@@ -52,6 +51,38 @@ const languageConfigs = {
     ],
     env: (code, input) => [sourceEnv(code), inputEnv(input)]
   }
+};
+
+const serializeExecutorError = (error, seen = new Set()) => {
+  if (error === null || error === undefined) return null;
+  if (typeof error !== 'object') return { message: String(error) };
+  if (seen.has(error)) return { message: '[circular cause]' };
+  seen.add(error);
+  return {
+    name: error.name || 'Error',
+    message: error.message || String(error),
+    stack: error.stack || null,
+    code: error.code ?? null,
+    errno: error.errno ?? null,
+    signal: error.signal ?? null,
+    stdout: error.stdout ?? null,
+    stderr: error.stderr ?? null,
+    exitCode: error.exitCode ?? error.statusCode ?? null,
+    cause: serializeExecutorError(error.cause, seen)
+  };
+};
+
+// The normal application logger deliberately redacts error internals. Executor
+// failures need the Docker daemon's exact diagnostic to be actionable, while
+// never logging the submitted source or input.
+const logExecutorFailure = (context) => {
+  process.stderr.write(`${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'error',
+    service: 'code-golf-arena',
+    event: 'executor.run.failed',
+    ...context
+  })}\n`);
 };
 
 const collectStream = (stream, state, field, limitBytes) => {
@@ -104,6 +135,27 @@ export const runCode = async (
 
   let container;
   let timeoutId;
+  let containerId = null;
+  const command = config.cmd();
+  const sourceFilePath = language === 'python'
+    ? '/tmp/main.py'
+    : language === 'javascript'
+      ? '/tmp/main.js'
+      : language === 'cpp'
+        ? '/tmp/main.cpp'
+        : '/tmp/Main.java';
+  const compileCommand = language === 'cpp'
+    ? 'g++ /tmp/main.cpp -O2 -std=c++17 -o /tmp/main'
+    : language === 'java'
+      ? 'javac /tmp/Main.java'
+      : null;
+  const executeCommand = language === 'python'
+    ? 'python /tmp/main.py'
+    : language === 'javascript'
+      ? 'node /tmp/main.js'
+      : language === 'cpp'
+        ? '/tmp/main'
+        : 'java -cp /tmp Main';
   const state = {
     stdout: '',
     stderr: '',
@@ -120,13 +172,14 @@ export const runCode = async (
   try {
     container = await dockerClient.createContainer({
       Image: config.image,
-      Cmd: config.cmd(),
+      Cmd: command,
       Env: config.env(code, input),
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
       NetworkDisabled: true,
       User: '65534:65534',
+      WorkingDir: '/tmp',
       HostConfig: {
         Memory: memoryLimitBytes,
         MemorySwap: memoryLimitBytes,
@@ -140,10 +193,11 @@ export const runCode = async (
           '/tmp': `rw,nosuid,nodev,size=${Math.min(
             96,
             boundedMemoryLimitMb
-          )}m,mode=1777`
+          )}m,mode=1777,exec`
         }
       }
     });
+    containerId = container.id;
 
     const stream = await container.attach({
       stream: true,
@@ -193,7 +247,20 @@ export const runCode = async (
       outputTruncated: state.outputTruncated
     });
   } catch (err) {
-    logger.error('executor.run.failed', { error: err, language });
+    logExecutorFailure({
+      language,
+      dockerCommand: command,
+      image: config.image,
+      workingDirectory: '/tmp',
+      temporaryDirectory: '/tmp',
+      sourceFilePath,
+      bindMountHostPath: null,
+      bindMountContainerPath: null,
+      compileCommand,
+      executeCommand,
+      containerId,
+      failure: serializeExecutorError(err)
+    });
     return createExecutionResult({
       stdout: state.stdout.trim(),
       stderr: state.stderr.trim(),

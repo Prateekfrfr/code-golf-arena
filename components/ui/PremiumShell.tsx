@@ -58,11 +58,8 @@ export function PremiumShell({
     >
       <aside className="sidebar" aria-label="Application">
         <Link className="brand brand-premium" href="/">
-          <span className="brand-mark">CG</span>
-          <span>
-            <strong>Code Golf</strong>
-            <small>Arena</small>
-          </span>
+          <span className="brand-word">Code Golf</span>
+          <span className="brand-ball" aria-hidden="true" />
         </Link>
 
         <nav className="sidebar-nav" aria-label="Primary navigation">

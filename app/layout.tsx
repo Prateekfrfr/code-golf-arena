@@ -15,6 +15,22 @@ const mono = localFont({
   display: "swap",
 });
 
+const display = localFont({
+  src: "./fonts/archivo-latin-variable.woff2",
+  variable: "--font-display-loaded",
+  weight: "400 900",
+  style: "normal",
+  display: "swap",
+  declarations: [{ prop: "font-stretch", value: "62% 125%" }],
+});
+
+const code = localFont({
+  src: "./fonts/azeret-mono-latin-variable.woff2",
+  variable: "--font-code-loaded",
+  weight: "400 700",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: {
     default: "Code Golf Arena",
@@ -39,7 +55,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${mono.variable}`}
+      className={`${sans.variable} ${mono.variable} ${display.variable} ${code.variable}`}
       data-scroll-behavior="smooth"
     >
       <body>

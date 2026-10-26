@@ -765,8 +765,8 @@ export default function GameRoom({
                         <div key={index}>
                           <strong>Example {index + 1}</strong>
                           <code>
-                            in: {JSON.stringify(example.input)}
-                            {"\n"}out: {JSON.stringify(example.output)}
+                            in: {example.input}
+                            {"\n"}out: {example.output}
                           </code>
                         </div>
                       ))}

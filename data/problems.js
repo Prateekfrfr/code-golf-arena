@@ -61,7 +61,7 @@ const blueprints = [
     statement: 'A pier records the brightness change of each lantern. Positive values add light and negative values remove it. Print the final change after every record is applied.',
     input: 'The first line contains n. The second line contains n signed integers.',
     output: 'Print one integer: the sum of all recorded changes.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each recorded change is between −10^9 and 10^9'],
     hints: ['Keep one running total.'],
     explanation: 'Add each change exactly once.',
     cases: [['5\n3 -1 4 -2 6', '10', 'The five changes sum to 10.'], ['1\n-7', '-7', 'A single negative record remains negative.'], ['4\n0 0 0 0', '0'], ['6\n9 -9 8 -8 7 -7', '0']]
@@ -75,7 +75,7 @@ const blueprints = [
     statement: 'A harbor sensor stores one tide reading per minute. Find the greatest total recorded during any consecutive block of exactly k minutes.',
     input: 'The first line contains n and k. The second line contains n integers.',
     output: 'Print the maximum sum of a contiguous block of length k.',
-    constraints: ['1 ≤ k ≤ n ≤ 200000', '−10^6 ≤ ai ≤ 10^6'],
+    constraints: ['1 ≤ k ≤ n ≤ 200000', 'Each tide reading is between −10^6 and 10^6'],
     hints: ['Update the next window by removing one value and adding one value.'],
     explanation: 'A sliding window evaluates every valid block in linear time.',
     cases: [['6 3\n2 -1 5 1 -3 4', '6', 'The blocks [2,-1,5] and [-1,5,1] both sum to 6.'], ['4 2\n-5 -2 -8 -1', '-7', 'The best pair is -5,-2.'], ['5 1\n9 3 11 -4 2', '11'], ['7 4\n1 2 3 4 5 6 7', '22']]
@@ -89,7 +89,7 @@ const blueprints = [
     statement: 'A reading is an echo peak when it is strictly greater than both neighboring readings. The first and last readings cannot be peaks. Count the echo peaks.',
     input: 'The first line contains n. The second line contains n integers.',
     output: 'Print the number of echo peaks.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each reading is between −10^9 and 10^9'],
     hints: ['Only indices from 2 through n−1 need inspection.'],
     explanation: 'Compare each interior reading with its two neighbors.',
     cases: [['7\n1 4 2 5 5 3 6', '1', 'Only 4 is strictly greater than both neighbors; the adjacent equal 5 values are not peaks.'], ['2\n8 1', '0', 'There are no interior positions.'], ['5\n5 4 3 2 1', '0'], ['6\n0 2 0 2 0 2', '2']]
@@ -117,7 +117,7 @@ const blueprints = [
     statement: 'Copper tokens carry distinct serial values. After arranging them by value, find the smallest gap between neighboring serials.',
     input: 'The first line contains n. The second line contains n distinct integers.',
     output: 'Print the minimum absolute difference between any two serial values.',
-    constraints: ['2 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['2 ≤ n ≤ 200000', 'Each serial value is between −10^9 and 10^9'],
     hints: ['The closest pair becomes adjacent after sorting.'],
     explanation: 'Sort once, then scan adjacent differences.',
     cases: [['5\n14 3 9 20 11', '2', 'The closest serials are 9 and 11.'], ['2\n-4 7', '11', 'Only one pair exists.'], ['6\n100 1 50 49 80 81', '1'], ['4\n-10 -3 4 12', '7']]
@@ -201,7 +201,7 @@ const blueprints = [
     statement: 'After scores are sorted from smallest to largest, print them by alternately taking the smallest remaining score and the largest remaining score.',
     input: 'The first line contains n. The second line contains n integers.',
     output: 'Print the interleaved score order.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each score is between −10^9 and 10^9'],
     hints: ['Use two indices into the sorted array.'],
     explanation: 'Move the left index after a minimum and the right index after a maximum.',
     cases: [['6\n8 1 5 3 9 2', '1 9 2 8 3 5', 'The sorted list is 1,2,3,5,8,9.'], ['5\n4 4 1 7 2', '1 7 2 4 4', 'Duplicates remain valid entries.'], ['1\n12', '12'], ['4\n-2 -8 6 0', '-8 6 -2 0']]
@@ -215,7 +215,7 @@ const blueprints = [
     statement: 'Sort even-numbered shelf labels in increasing order, then odd-numbered labels in decreasing order.',
     input: 'The first line contains n. The second line contains n integers.',
     output: 'Print all sorted evens followed by all sorted odds.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each shelf label is between −10^9 and 10^9'],
     hints: ['Separate the labels into two lists before sorting.'],
     explanation: 'The two parity groups use opposite sort directions.',
     cases: [['7\n5 2 8 1 4 7 3', '2 4 8 7 5 3 1', 'Evens rise and odds fall.'], ['3\n9 5 1', '9 5 1', 'There are no even labels.'], ['4\n8 6 2 4', '2 4 6 8'], ['5\n-3 -2 -1 0 4', '-2 0 4 -1 -3']]
@@ -243,7 +243,7 @@ const blueprints = [
     statement: 'Two lanterns form a crossed wire when the earlier lantern has a greater height than the later lantern. Count crossed-wire pairs.',
     input: 'The first line contains n. The second line contains n heights.',
     output: 'Print the inversion count.',
-    constraints: ['1 ≤ n ≤ 200000', '0 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each height is between 0 and 10^9'],
     hints: ['Count split inversions while merging two sorted halves.'],
     explanation: 'Merge sort counts all inversions in O(n log n).',
     cases: [['5\n3 1 2 5 4', '3', 'The crossed pairs are (3,1), (3,2), and (5,4).'], ['4\n1 2 3 4', '0', 'The sequence is already increasing.'], ['4\n4 3 2 1', '6'], ['6\n2 2 1 3 0 3', '6']]
@@ -257,7 +257,7 @@ const blueprints = [
     statement: 'Joining two sorted cargo stacks costs their combined size, and the joined stack can be used again. Find the minimum total cost to join every stack.',
     input: 'The first line contains n. The second line contains n positive stack sizes.',
     output: 'Print the minimum total joining cost.',
-    constraints: ['1 ≤ n ≤ 200000', '1 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each stack size is between 1 and 10^9'],
     hints: ['Always join the two smallest available stacks.'],
     explanation: 'A min-priority queue implements the optimal merge pattern.',
     cases: [['4\n5 2 4 7', '36', 'Join 2+4=6, then 5+6=11, then 7+11=18; total 36.'], ['1\n9', '0', 'No join is needed.'], ['3\n1 1 1', '5'], ['5\n8 4 6 12 3', '73']]
@@ -285,7 +285,7 @@ const blueprints = [
     statement: 'Bell times are sorted. Find the one-based position of the first bell whose time is at least x, or print -1 if every bell is earlier.',
     input: 'The first line contains n and x. The second line contains n sorted integers.',
     output: 'Print the one-based position or -1.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai, x ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Bell times and x are each between −10^9 and 10^9'],
     hints: ['Search for the lower bound of x.'],
     explanation: 'Binary search maintains the earliest feasible index.',
     cases: [['6 7\n1 4 7 7 9 12', '3', 'The first value at least 7 is at position 3.'], ['4 10\n1 2 5 8', '-1', 'No time reaches 10.'], ['5 -2\n-5 -2 0 3 9', '2'], ['1 4\n4', '1']]
@@ -299,7 +299,7 @@ const blueprints = [
     statement: 'A sorted register stores citizen numbers. Count how many entries lie in the inclusive interval [l,r].',
     input: 'The first line contains n, l, and r. The second line contains n sorted integers.',
     output: 'Print the count of values between l and r inclusive.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai, l, r ≤ 10^9', 'l ≤ r'],
+    constraints: ['1 ≤ n ≤ 200000', 'Register values, l, and r are each between −10^9 and 10^9', 'l ≤ r'],
     hints: ['Subtract the lower-bound position of l from the upper-bound position of r.'],
     explanation: 'Two binary searches isolate the interval.',
     cases: [['8 3 7\n1 3 3 4 7 7 9 11', '6', 'Six entries are between 3 and 7.'], ['5 20 30\n1 2 3 4 5', '0', 'The interval contains no entries.'], ['6 -2 0\n-5 -2 -2 0 1 8', '3'], ['4 4 4\n4 4 4 4', '4']]
@@ -341,7 +341,7 @@ const blueprints = [
     statement: 'Each candle burns for a stated number of minutes. You may light only one candle at a time. To maximize the time before the first candle goes dark, in what order should they be lit? Print the maximum possible first-extinguish time, defined as the minimum of start minute plus burn time.',
     input: 'The first line contains n. The second line contains n positive burn times.',
     output: 'Print the greatest possible first-extinguish time.',
-    constraints: ['1 ≤ n ≤ 200000', '1 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each burn time is between 1 and 10^9'],
     hints: ['Light longer-burning candles earlier.'],
     explanation: 'Sorting descending maximizes the minimum deadline slack.',
     cases: [['4\n3 8 4 6', '6', 'Order 8,6,4,3 gives extinction times 8,7,6,6.'], ['1\n5', '5', 'The only candle starts immediately.'], ['3\n1 1 1', '1'], ['5\n10 2 7 7 3', '6']]
@@ -369,7 +369,7 @@ const blueprints = [
     statement: 'A printer has capacity c. Before each job it may refill to c; job i consumes ai units. Starting full, print the minimum number of refills required, or -1 if a job exceeds capacity.',
     input: 'The first line contains n and c. The second line contains n job costs.',
     output: 'Print the minimum refill count or -1.',
-    constraints: ['1 ≤ n ≤ 200000', '1 ≤ c, ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', '1 ≤ c ≤ 10^9', 'Each job cost is between 1 and 10^9'],
     hints: ['Refill only when the next job does not fit.'],
     explanation: 'Delaying each refill cannot hurt any later job.',
     cases: [['5 10\n4 6 3 8 2', '2', 'Refill before jobs costing 3 and 8.'], ['3 5\n2 6 1', '-1', 'A job costing 6 can never run.'], ['4 8\n2 2 2 2', '0'], ['6 7\n7 1 6 2 5 7', '4']]
@@ -383,7 +383,7 @@ const blueprints = [
     statement: 'Two boots may share a box when their combined weight is at most w. Each box holds at most two boots. Find the minimum boxes.',
     input: 'The first line contains n and w. The second line contains n boot weights.',
     output: 'Print the minimum number of boxes.',
-    constraints: ['1 ≤ n ≤ 200000', '1 ≤ ai ≤ w ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', '1 ≤ w ≤ 10^9', 'Each boot weight is between 1 and w'],
     hints: ['After sorting, try pairing the lightest boot with the heaviest.'],
     explanation: 'If the heaviest can pair at all, pairing it with the lightest is safest.',
     cases: [['6 10\n2 3 7 8 4 6', '3', 'Pairs (2,8), (3,7), and (4,6) fit.'], ['4 5\n4 4 4 4', '4', 'No pair fits.'], ['5 9\n1 2 3 7 8', '3'], ['1 100\n42', '1']]
@@ -509,7 +509,7 @@ const blueprints = [
     statement: 'A rooted tree is given by each non-root vertex parent. For vertices a and b, print the number of edges on their unique path.',
     input: 'The first line contains n, a, and b. The second line contains parents of vertices 2 through n.',
     output: 'Print the distance between a and b.',
-    constraints: ['2 ≤ n ≤ 200000', '1 ≤ parent[i] < i'],
+    constraints: ['2 ≤ n ≤ 200000', 'For each vertex from 2 through n, its parent number is between 1 and one less than the vertex number'],
     hints: ['Distance equals depth[a]+depth[b]−2·depth[LCA].'],
     explanation: 'Lift the deeper vertex, then lift both until their ancestors agree.',
     cases: [['7 4 7\n1 1 2 2 3 6', '5', 'The path is 4-2-1-3-6-7.'], ['5 3 5\n1 1 3 3', '1', 'Vertex 3 is the parent of 5.'], ['4 2 4\n1 2 3', '2'], ['6 5 6\n1 1 2 2 3', '4']]
@@ -523,7 +523,7 @@ const blueprints = [
     statement: 'Each vertex of a tree rooted at 1 stores coins. Print the total coins in the subtree of every vertex.',
     input: 'The first line contains n. The second line contains n coin counts. The next n−1 lines contain edges.',
     output: 'Print n subtree sums in vertex order.',
-    constraints: ['1 ≤ n ≤ 200000', '0 ≤ coins[i] ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each vertex has between 0 and 10^9 coins'],
     hints: ['A postorder traversal adds child totals into the parent.'],
     explanation: 'Each edge contributes its child subtree sum once.',
     cases: [['5\n2 1 4 3 5\n1 2\n1 3\n3 4\n3 5', '15 1 12 3 5', 'Root 1 owns all 15 coins; vertex 3 owns 4+3+5.'], ['1\n9', '9', 'The only subtree contains the root.'], ['3\n1 2 3\n1 2\n2 3', '6 5 3'], ['4\n0 5 0 7\n1 2\n1 3\n1 4', '12 5 0 7']]
@@ -705,7 +705,7 @@ const blueprints = [
     statement: 'Crates must cross in order over d days. Each day carries a consecutive block whose total weight cannot exceed capacity. Find the minimum capacity that finishes on time.',
     input: 'The first line contains n and d. The second line contains n positive weights.',
     output: 'Print the minimum feasible daily capacity.',
-    constraints: ['1 ≤ d ≤ n ≤ 200000', '1 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ d ≤ n ≤ 200000', 'Each crate weight is between 1 and 10^9'],
     hints: ['Feasibility for a capacity is checked greedily and is monotone.'],
     explanation: 'Binary-search between the heaviest crate and total weight.',
     cases: [['5 3\n4 2 7 3 5', '8', 'Capacity 8 carries [4,2], [7], and [3,5] in three days.'], ['4 1\n2 3 4 5', '14', 'One day must carry everything.'], ['4 4\n2 3 4 5', '5'], ['6 2\n1 2 3 4 5 6', '11']]
@@ -719,7 +719,7 @@ const blueprints = [
     statement: 'Daily donations are non-negative. Find the first day when their cumulative total reaches at least target t, or -1 if it never does.',
     input: 'The first line contains n and t. The second line contains n non-negative integers.',
     output: 'Print the one-based first day or -1.',
-    constraints: ['1 ≤ n ≤ 200000', '0 ≤ ai,t ≤ 10^18'],
+    constraints: ['1 ≤ n ≤ 200000', 'Donations and target t are each between 0 and 10^18'],
     hints: ['Prefix sums are sorted, so lower-bound t.'],
     explanation: 'The earliest prefix at least t is the answer.',
     cases: [['5 12\n2 5 1 7 3', '4', 'Cumulative totals are 2,7,8,15,18.'], ['3 20\n4 5 6', '-1', 'The total is only 15.'], ['4 0\n0 0 1 0', '1'], ['1 9\n9', '1']]
@@ -733,8 +733,8 @@ const blueprints = [
     statement: 'Glass rods may be cut into equal integer lengths. Find the greatest length that yields at least k pieces.',
     input: 'The first line contains n and k. The second line contains n rod lengths.',
     output: 'Print the maximum feasible piece length, or 0 if no positive length works.',
-    constraints: ['1 ≤ n ≤ 200000', '1 ≤ k ≤ 10^18', '1 ≤ ai ≤ 10^18'],
-    hints: ['For length x, count sum floor(ai/x).'],
+    constraints: ['1 ≤ n ≤ 200000', '1 ≤ k ≤ 10^18', 'Each rod length is between 1 and 10^18'],
+    hints: ['For a candidate length x, add the number of pieces each rod can produce.'],
     explanation: 'Piece count decreases monotonically as the chosen length grows.',
     cases: [['4 7\n10 8 6 4', '3', 'Length 3 yields 3+2+2+1=8 pieces, while length 4 yields only 6.'], ['3 100\n2 2 2', '0', 'Not enough unit pieces exist.'], ['4 6\n10 8 6 4', '4'], ['2 3\n9 5', '4']]
   },
@@ -761,7 +761,7 @@ const blueprints = [
     statement: 'Houses lie on a line. One transmitter covers houses within radius r of its location, and you may place at most k transmitters anywhere. Find the minimum integer radius.',
     input: 'The first line contains n and k. The second line contains n house coordinates.',
     output: 'Print the minimum feasible radius.',
-    constraints: ['1 ≤ k ≤ n ≤ 200000', '0 ≤ xi ≤ 10^9'],
+    constraints: ['1 ≤ k ≤ n ≤ 200000', 'Each house coordinate is between 0 and 10^9'],
     hints: ['For a fixed radius, greedily cover from the leftmost uncovered house.'],
     explanation: 'Coverage feasibility is monotone in the radius.',
     cases: [['5 2\n1 2 8 10 12', '2', 'Radius 2 covers 1,2 and 8,10,12 with two transmitters.'], ['4 4\n3 9 20 30', '0', 'Place one transmitter at each house.'], ['3 1\n0 10 20', '10'], ['6 2\n0 1 2 100 101 102', '1']]
@@ -803,7 +803,7 @@ const blueprints = [
     statement: 'Find the length of the longest strictly increasing subsequence of sensor readings.',
     input: 'The first line contains n. The second line contains n integers.',
     output: 'Print the subsequence length.',
-    constraints: ['1 ≤ n ≤ 200000', '−10^9 ≤ ai ≤ 10^9'],
+    constraints: ['1 ≤ n ≤ 200000', 'Each reading is between −10^9 and 10^9'],
     hints: ['Maintain the smallest possible tail for each subsequence length.'],
     explanation: 'Binary-searching tails gives O(n log n).',
     cases: [['8\n5 1 6 2 3 8 4 9', '5', 'One answer is 1,2,3,4,9.'], ['5\n7 7 7 7 7', '1', 'Strict increase forbids equal neighbors.'], ['6\n6 5 4 3 2 1', '1'], ['7\n-3 -1 -2 0 4 2 5', '5']]
@@ -901,7 +901,7 @@ const blueprints = [
     statement: 'Each beacon contributes a positive signal strength and may be selected once. Count subsets whose total is exactly target, modulo 1000000007.',
     input: 'The first line contains n and target. The second line contains n positive strengths.',
     output: 'Print the number of subsets with the requested total.',
-    constraints: ['1 ≤ n ≤ 200', '0 ≤ target ≤ 200000', '1 ≤ ai ≤ target when target>0'],
+    constraints: ['1 ≤ n ≤ 200', '0 ≤ target ≤ 200000', 'Strengths are positive; if target is greater than 0, each strength is at most target'],
     hints: ['Update one-dimensional DP in descending total order.'],
     explanation: 'Descending updates prevent a beacon from being used more than once.',
     cases: [['5 7\n1 2 3 4 5', '3', 'The subsets are {2,5}, {3,4}, and {1,2,4}.'], ['3 0\n2 4 6', '1', 'Only the empty subset totals zero.'], ['4 5\n5 5 5 5', '4'], ['6 10\n1 1 2 3 5 8', '4']]

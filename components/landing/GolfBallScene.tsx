@@ -3,6 +3,77 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
+/**
+ * Builds a golf ball mesh: a smooth sphere with geodesic hexagonal/pentagonal
+ * dimples — the dual graph of the subdivided icosahedron.
+ *
+ * Strategy:
+ *  1. Build an IcosahedronGeometry at subdivision level 3 (320 triangular faces).
+ *  2. Collect ALL unique triangle face centroids — these become dimple centers.
+ *  3. On a higher-resolution sphere (IcosahedronGeometry level 6), for each
+ *     vertex, find the nearest face-centroid from step 2. If within the dimple
+ *     radius, displace the vertex inward along its normal using a smooth cosine
+ *     profile. This produces the correct hexagonal/pentagonal dimple pattern.
+ */
+function buildGolfBallGeometry(radius: number): THREE.BufferGeometry {
+  // --- Step 1: Collect dimple centres from a coarse subdivision ---
+  const coarse = new THREE.IcosahedronGeometry(1, 3); // subdivision 3 → 320 faces
+  const cPos = coarse.attributes.position;
+  const dimpleCenters: THREE.Vector3[] = [];
+
+  // Each face = 3 consecutive vertices in non-indexed geometry
+  for (let f = 0; f < cPos.count; f += 3) {
+    const a = new THREE.Vector3().fromBufferAttribute(cPos, f);
+    const b = new THREE.Vector3().fromBufferAttribute(cPos, f + 1);
+    const c = new THREE.Vector3().fromBufferAttribute(cPos, f + 2);
+    const centroid = new THREE.Vector3()
+      .addVectors(a, b)
+      .add(c)
+      .divideScalar(3)
+      .normalize(); // project to unit sphere
+    dimpleCenters.push(centroid);
+  }
+  coarse.dispose();
+
+  // --- Step 2: Build the high-resolution sphere that will receive dimples ---
+  const fine = new THREE.IcosahedronGeometry(radius, 6); // subdivision 6 → 40960 faces
+  const fPos = fine.attributes.position;
+
+  const vertex = new THREE.Vector3();
+  const unitV = new THREE.Vector3();
+
+  // Dimple parameters (tuned for realistic golf ball look)
+  const dimpleAngularRadius = 0.19; // angular radius in radians (about 11°)
+  const dimpleDepth = radius * 0.055; // indentation depth
+
+  for (let i = 0; i < fPos.count; i++) {
+    vertex.fromBufferAttribute(fPos, i);
+    unitV.copy(vertex).normalize();
+
+    // Find nearest dimple center (sorted Y scan for minor speedup)
+    let minDist = Infinity;
+    for (let j = 0; j < dimpleCenters.length; j++) {
+      const d = unitV.distanceTo(dimpleCenters[j]);
+      if (d < minDist) minDist = d;
+      // Angular distance approximation: if center.y is too far, skip
+      if (Math.abs(dimpleCenters[j].y - unitV.y) > dimpleAngularRadius * 1.5)
+        continue;
+    }
+
+    if (minDist < dimpleAngularRadius) {
+      // Smooth cosine profile: deepest at centre, zero at rim
+      const t = minDist / dimpleAngularRadius; // 0 at center, 1 at rim
+      const depression = dimpleDepth * (0.5 + 0.5 * Math.cos(t * Math.PI));
+      // Displace inward along the surface normal (unit vector)
+      vertex.addScaledVector(unitV, -depression);
+      fPos.setXYZ(i, vertex.x, vertex.y, vertex.z);
+    }
+  }
+
+  fine.computeVertexNormals();
+  return fine;
+}
+
 export function GolfBallScene() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [webglSupported, setWebglSupported] = useState(true);
@@ -11,291 +82,158 @@ export function GolfBallScene() {
     const container = containerRef.current;
     if (!container) return;
 
-    // Check WebGL availability
+    // --- WebGL check ---
     try {
-      const testCanvas = document.createElement("canvas");
-      const gl =
-        testCanvas.getContext("webgl") ||
-        testCanvas.getContext("experimental-webgl");
-      if (!gl) {
-        setWebglSupported(false);
-        return;
-      }
-    } catch {
-      setWebglSupported(false);
-      return;
-    }
+      const test = document.createElement("canvas");
+      const gl = test.getContext("webgl") || test.getContext("experimental-webgl");
+      if (!gl) { setWebglSupported(false); return; }
+    } catch { setWebglSupported(false); return; }
 
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    let animId: number;
     let isVisible = true;
-    let animationFrameId: number;
 
-    // Check prefers-reduced-motion
-    const prefersReducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
-
-    // Scene & Camera
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      38,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      50,
-    );
-    camera.position.set(0, 0, 4.4);
-
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      powerPreference: "high-performance",
-    });
+    // --- Renderer ---
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.25;
+    renderer.toneMappingExposure = 1.3;
     container.appendChild(renderer.domElement);
 
-    // Environment map using PMREMGenerator & studio softboxes
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    pmremGenerator.compileEquirectangularShader();
+    // --- Scene / Camera ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(36, container.clientWidth / container.clientHeight, 0.1, 50);
+    camera.position.set(0, 0, 5.5);
 
+    // --- Environment map (3 softboxes → PMREMGenerator) ---
+    const pmrem = new THREE.PMREMGenerator(renderer);
     const envScene = new THREE.Scene();
-    // Warm softbox 1
-    const softbox1 = new THREE.Mesh(
-      new THREE.PlaneGeometry(6, 6),
-      new THREE.MeshBasicMaterial({ color: 0xfffae6, side: THREE.DoubleSide }),
-    );
-    softbox1.position.set(4, 5, 3);
-    softbox1.lookAt(0, 0, 0);
-    envScene.add(softbox1);
-
-    // Softbox 2 (cooler rim)
-    const softbox2 = new THREE.Mesh(
-      new THREE.PlaneGeometry(5, 5),
-      new THREE.MeshBasicMaterial({ color: 0xcde0d3, side: THREE.DoubleSide }),
-    );
-    softbox2.position.set(-5, -2, -3);
-    softbox2.lookAt(0, 0, 0);
-    envScene.add(softbox2);
-
-    // Softbox 3 (overhead gold bounce)
-    const softbox3 = new THREE.Mesh(
-      new THREE.PlaneGeometry(4, 4),
-      new THREE.MeshBasicMaterial({ color: 0xf5df88, side: THREE.DoubleSide }),
-    );
-    softbox3.position.set(0, 6, 0);
-    softbox3.lookAt(0, 0, 0);
-    envScene.add(softbox3);
-
-    const envTexture = pmremGenerator.fromScene(envScene).texture;
+    const addBox = (color: number, x: number, y: number, z: number, w: number, h: number) => {
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({ color, side: THREE.FrontSide })
+      );
+      m.position.set(x, y, z);
+      m.lookAt(0, 0, 0);
+      envScene.add(m);
+      return m;
+    };
+    const sb1 = addBox(0xfffad0, 6, 5, 4, 8, 8);   // warm top-right key
+    const sb2 = addBox(0xd0ead8, -6, -2, -4, 6, 6); // green-tinted fill
+    const sb3 = addBox(0xffe8a0, 0, 6, -2, 5, 5);   // overhead bounce
+    const envTexture = pmrem.fromScene(envScene).texture;
     scene.environment = envTexture;
 
-    // Build Golf Ball with Fibonacci Dimples
-    const ballRadius = 1.32;
-    // Subdivision 5 gives 10242 uniformly spaced vertices
-    const sphereGeo = new THREE.IcosahedronGeometry(ballRadius, 5);
-
-    // Generate ~360 dimple centers on unit sphere via Fibonacci spiral
-    const dimpleCount = 360;
-    const dimpleCenters: THREE.Vector3[] = [];
-    const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
-
-    for (let i = 0; i < dimpleCount; i++) {
-      const y = 1 - (i / (dimpleCount - 1)) * 2;
-      const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = phi * i;
-      const x = Math.cos(theta) * radiusAtY;
-      const z = Math.sin(theta) * radiusAtY;
-      dimpleCenters.push(new THREE.Vector3(x, y, z));
-    }
-
-    // Sort dimple centers by Y for binary/window search acceleration
-    dimpleCenters.sort((a, b) => a.y - b.y);
-
-    const positions = sphereGeo.attributes.position;
-    const vertex = new THREE.Vector3();
-    const unitV = new THREE.Vector3();
-    const dimpleRadiusAngle = 0.088; // angular radius in radians
-    const maxDepth = ballRadius * 0.042; // indentation depth
-
-    for (let i = 0; i < positions.count; i++) {
-      vertex.fromBufferAttribute(positions, i);
-      unitV.copy(vertex).normalize();
-
-      // Find nearest dimple center within window
-      let minAngularDist = 999;
-      for (let j = 0; j < dimpleCenters.length; j++) {
-        const center = dimpleCenters[j];
-        if (center.y - unitV.y > dimpleRadiusAngle) break;
-        if (unitV.y - center.y > dimpleRadiusAngle) continue;
-
-        const dist = unitV.distanceTo(center);
-        if (dist < minAngularDist) {
-          minAngularDist = dist;
-        }
-      }
-
-      // If vertex falls within a dimple, indent smoothly
-      if (minAngularDist < dimpleRadiusAngle) {
-        const factor = Math.cos(
-          (minAngularDist / dimpleRadiusAngle) * (Math.PI / 2),
-        );
-        const displacement = maxDepth * (factor * factor);
-        vertex.sub(unitV.multiplyScalar(displacement));
-        positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-      }
-    }
-
-    sphereGeo.computeVertexNormals();
-
-    // Heavy Metal Brass / Gold Material
-    const ballMaterial = new THREE.MeshStandardMaterial({
+    // --- Golf Ball Mesh ---
+    const ballRadius = 1.5;
+    const ballGeo = buildGolfBallGeometry(ballRadius);
+    const ballMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color("#d4a843"),
-      metalness: 0.95,
-      roughness: 0.3,
-      envMapIntensity: 1.1,
+      metalness: 1.0,
+      roughness: 0.28,
+      envMapIntensity: 1.3,
     });
+    const ball = new THREE.Mesh(ballGeo, ballMat);
+    scene.add(ball);
 
-    const ballMesh = new THREE.Mesh(sphereGeo, ballMaterial);
-    scene.add(ballMesh);
+    // --- Lights ---
+    scene.add(new THREE.AmbientLight(0x1a3820, 0.7));
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0x1a3826, 0.85); // Turf green ambient bounce
-    scene.add(ambientLight);
-
-    const keyLight = new THREE.DirectionalLight(0xfff5d6, 2.4);
-    keyLight.position.set(4, 5, 5);
+    const keyLight = new THREE.DirectionalLight(0xfff5c0, 3.2);
+    keyLight.position.set(5, 6, 5);
     scene.add(keyLight);
 
-    // Warm point light following cursor
-    const pointerLight = new THREE.PointLight(0xffeed0, 2.0, 10);
-    pointerLight.position.set(0, 0, 3.5);
-    scene.add(pointerLight);
+    const rimLight = new THREE.DirectionalLight(0xffd070, 1.4);
+    rimLight.position.set(-4, 3, -3);
+    scene.add(rimLight);
 
-    // Physics / Spring Drop-in State
-    let dropY = prefersReducedMotion ? 0 : 3.8;
-    let dropVelocity = 0;
-    const springStrength = 0.045;
-    const damping = 0.82;
+    // Pointer warm point light
+    const ptrLight = new THREE.PointLight(0xffecb0, 2.5, 12);
+    ptrLight.position.set(0, 0, 4);
+    scene.add(ptrLight);
 
-    // Pointer Tracking
-    let targetTiltX = 0;
-    let targetTiltY = 0;
-    let scrollShrink = 1;
+    // --- Spring drop-in ---
+    let dropY = prefersReducedMotion ? 0 : 4.0;
+    let dropV = 0;
 
-    const handlePointerMove = (event: PointerEvent) => {
+    // --- Pointer tilt ---
+    let tiltX = 0, tiltY = 0;
+
+    const onPointerMove = (e: PointerEvent) => {
       const rect = container.getBoundingClientRect();
-      const x = (event.clientX - rect.left) / rect.width - 0.5;
-      const y = (event.clientY - rect.top) / rect.height - 0.5;
-
-      targetTiltY = x * 0.9;
-      targetTiltX = y * 0.7;
-
-      pointerLight.position.x = x * 4;
-      pointerLight.position.y = -y * 4;
+      const nx = (e.clientX - rect.left) / rect.width - 0.5;
+      const ny = (e.clientY - rect.top) / rect.height - 0.5;
+      tiltY = nx * 1.1;
+      tiltX = ny * 0.8;
+      ptrLight.position.x = nx * 5;
+      ptrLight.position.y = -ny * 5;
     };
+    window.addEventListener("pointermove", onPointerMove);
 
-    window.addEventListener("pointermove", handlePointerMove);
-
-    // Scroll Effect: Shrinks slightly and moves out of the way
-    const handleScroll = () => {
-      const scrollY = window.scrollY;
-      scrollShrink = Math.max(0.68, 1 - scrollY / 650);
-    };
-    window.addEventListener("scroll", handleScroll, { passive: true });
-
-    // Resize Observer
-    const handleResize = () => {
+    // --- Resize ---
+    const onResize = () => {
       if (!container) return;
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-      camera.aspect = width / height;
+      camera.aspect = container.clientWidth / container.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(width, height);
+      renderer.setSize(container.clientWidth, container.clientHeight);
     };
+    const resizeObs = new ResizeObserver(onResize);
+    resizeObs.observe(container);
 
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(container);
+    // --- Visibility ---
+    const visObs = new IntersectionObserver(([e]) => { isVisible = e.isIntersecting; });
+    visObs.observe(container);
 
-    // Visibility Observer
-    const intersectionObserver = new IntersectionObserver(([entry]) => {
-      isVisible = entry.isIntersecting;
-    });
-    intersectionObserver.observe(container);
+    // --- Hidden tab pause ---
+    const onVisChange = () => { isVisible = !document.hidden; };
+    document.addEventListener("visibilitychange", onVisChange);
 
-    // Animation Loop
-    let clock = new THREE.Clock();
+    const clock = new THREE.Clock();
 
     const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
+      animId = requestAnimationFrame(animate);
       if (!isVisible) return;
+      const dt = clock.getDelta();
 
-      const delta = clock.getDelta();
-
-      // Spring drop-in physics
+      // Spring drop
       if (!prefersReducedMotion && Math.abs(dropY) > 0.001) {
-        const force = -springStrength * dropY;
-        dropVelocity = (dropVelocity + force) * damping;
-        dropY += dropVelocity;
-        if (Math.abs(dropY) < 0.001 && Math.abs(dropVelocity) < 0.001) {
-          dropY = 0;
-        }
-      }
+        dropV = (dropV - 0.048 * dropY) * 0.80;
+        dropY += dropV;
+      } else { dropY = 0; }
 
-      ballMesh.position.y = dropY;
+      ball.position.y = dropY;
 
-      // Subtle slow rotation
-      if (!prefersReducedMotion) {
-        ballMesh.rotation.y += delta * 0.28;
-      }
+      // Slow auto-rotation
+      if (!prefersReducedMotion) ball.rotation.y += dt * 0.22;
 
-      // Smooth tilt toward pointer
-      ballMesh.rotation.x += (targetTiltX - ballMesh.rotation.x) * 0.06;
-      ballMesh.rotation.z += (-targetTiltY * 0.5 - ballMesh.rotation.z) * 0.06;
-
-      // Scale on scroll
-      ballMesh.scale.setScalar(scrollShrink);
+      // Pointer tilt with damping
+      ball.rotation.x += (tiltX - ball.rotation.x) * 0.07;
+      ball.rotation.z += (-tiltY * 0.4 - ball.rotation.z) * 0.07;
 
       renderer.render(scene, camera);
     };
-
     animate();
 
-    // Cleanup
     return () => {
-      cancelAnimationFrame(animationFrameId);
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("scroll", handleScroll);
-      resizeObserver.disconnect();
-      intersectionObserver.disconnect();
-
-      if (container && renderer.domElement) {
-        container.removeChild(renderer.domElement);
-      }
-
-      sphereGeo.dispose();
-      ballMaterial.dispose();
-      softbox1.geometry.dispose();
-      (softbox1.material as THREE.Material).dispose();
-      softbox2.geometry.dispose();
-      (softbox2.material as THREE.Material).dispose();
-      softbox3.geometry.dispose();
-      (softbox3.material as THREE.Material).dispose();
+      cancelAnimationFrame(animId);
+      window.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("visibilitychange", onVisChange);
+      resizeObs.disconnect();
+      visObs.disconnect();
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+      ballGeo.dispose();
+      ballMat.dispose();
+      [sb1, sb2, sb3].forEach(m => { m.geometry.dispose(); (m.material as THREE.Material).dispose(); });
       envTexture.dispose();
-      pmremGenerator.dispose();
+      pmrem.dispose();
       renderer.dispose();
     };
   }, []);
 
   if (!webglSupported) {
-    return (
-      <div
-        className="golf-ball-fallback"
-        aria-label="Gold golf ball fallback"
-      >
-        <div className="flat-gold-ball" />
-      </div>
-    );
+    return <div className="golf-ball-fallback" aria-label="Gold golf ball"><div className="flat-gold-ball" /></div>;
   }
 
   return (
@@ -303,7 +241,7 @@ export function GolfBallScene() {
       ref={containerRef}
       className="golf-ball-container"
       role="img"
-      aria-label="Interactive 3D heavy brass golf ball with dimples"
+      aria-label="Interactive 3D gold golf ball with hexagonal dimples"
     />
   );
 }

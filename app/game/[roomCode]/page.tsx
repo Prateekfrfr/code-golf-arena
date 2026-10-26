@@ -169,8 +169,7 @@ export default function GameRoom({
 
   const [code, setCode] = useState("");
   const [opponentCode, setOpponentCode] = useState("");
-  const [opponentLanguage, setOpponentLanguage] =
-    useState<Language>("python");
+  const [opponentLanguage, setOpponentLanguage] = useState<Language>("python");
   const [problem, setProblem] = useState<Problem | null>(null);
   const [result, setResult] = useState<SubmissionResult | null>(null);
   const [language, setLanguage] = useState<Language>("python");
@@ -299,8 +298,7 @@ export default function GameRoom({
       });
       setCode((currentCode) => {
         if (currentCode) return currentCode;
-        const firstLanguage =
-          problemData.supportedLanguages?.[0] || "python";
+        const firstLanguage = problemData.supportedLanguages?.[0] || "python";
         return (
           problemData.starterCode?.[firstLanguage] ||
           problemData.starterCode?.python ||
@@ -353,7 +351,8 @@ export default function GameRoom({
   useEffect(() => {
     const handleCheatWarning = (event: AntiCheatWarning) => {
       const stats = normalizeAntiCheatStats(event.stats);
-      const totalWarnings = event.session?.violationCount ??
+      const totalWarnings =
+        event.session?.violationCount ??
         stats.tabSwitches +
           stats.suspiciousPastes +
           stats.submissionSpamAttempts;
@@ -483,9 +482,7 @@ export default function GameRoom({
     if (cooldownRemainingMs <= 0) return;
 
     const timeout = window.setTimeout(() => {
-      setCooldownRemainingMs(
-        (remaining) => Math.max(0, remaining - 200),
-      );
+      setCooldownRemainingMs((remaining) => Math.max(0, remaining - 200));
     }, 200);
 
     return () => window.clearTimeout(timeout);
@@ -640,10 +637,9 @@ export default function GameRoom({
     reportBlockedInput("paste");
   };
 
-  const supportedLanguages =
-    problem?.supportedLanguages?.length
-      ? problem.supportedLanguages
-      : (["python", "javascript", "cpp", "java"] as Language[]);
+  const supportedLanguages = problem?.supportedLanguages?.length
+    ? problem.supportedLanguages
+    : (["python", "javascript", "cpp", "java"] as Language[]);
 
   return (
     <PremiumShell
@@ -651,7 +647,11 @@ export default function GameRoom({
       navItems={[
         { label: "Home", href: "/", marker: "cd" },
         { label: "Problems", href: "/problems", marker: "{}" },
-        { label: roomMode === "solo" ? "Practice" : "Live room", active: true, marker: ">>" },
+        {
+          label: roomMode === "solo" ? "Practice" : "Live room",
+          active: true,
+          marker: ">>",
+        },
       ]}
       status={
         <>
@@ -747,482 +747,536 @@ export default function GameRoom({
                 : "problem-workspace"
             }
           >
-        <aside className="problem-panel">
-          <SurfaceCard className="statement-card">
-            {problem ? (
-              <>
-                <div className="problem-card-top">
-                  <span className="ledger-marker">::{problem.topic}</span>
-                  <span className="badge">{problem.difficulty}</span>
-                </div>
-                <h2>{problem.title}</h2>
-                <p>{problem.statement || problem.description}</p>
-                {problem.examples && problem.examples.length > 0 && (
-                  <details className="problem-details">
-                    <summary>Examples ({problem.examples.length})</summary>
-                    <div className="problem-detail-list">
-                      {problem.examples.map((example, index) => (
-                        <div key={index}>
-                          <strong>Example {index + 1}</strong>
-                          <code>
-                            in: {example.input}
-                            {"\n"}out: {example.output}
-                          </code>
+            <aside className="problem-panel">
+              <SurfaceCard className="statement-card">
+                {problem ? (
+                  <>
+                    <div className="problem-card-top">
+                      <span className="ledger-marker">::{problem.topic}</span>
+                      <span className="badge">{problem.difficulty}</span>
+                    </div>
+                    <h2>{problem.title}</h2>
+                    <p>{problem.statement || problem.description}</p>
+                    {problem.examples && problem.examples.length > 0 && (
+                      <details className="problem-details">
+                        <summary>Examples ({problem.examples.length})</summary>
+                        <div className="problem-detail-list">
+                          {problem.examples.map((example, index) => (
+                            <div key={index}>
+                              <strong>Example {index + 1}</strong>
+                              <code>
+                                in: {String(example.input ?? "")}
+                                {"\n"}out: {String(example.output ?? "")}
+                              </code>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </details>
+                      </details>
+                    )}
+                    {problem.constraints && problem.constraints.length > 0 && (
+                      <details className="problem-details">
+                        <summary>Constraints</summary>
+                        <ul>
+                          {problem.constraints.map((constraint) => (
+                            <li key={constraint}>{constraint}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                    <SubmissionGuide
+                      supportedLanguages={supportedLanguages}
+                      variant="panel"
+                    />
+                  </>
+                ) : connected && problemDelayed ? (
+                  <div className="inline-state" role="status">
+                    <strong>Problem is taking longer than expected.</strong>
+                    <span>
+                      Retry the room request without leaving your session.
+                    </span>
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={requestRoomState}
+                    >
+                      retry problem
+                    </button>
+                  </div>
+                ) : (
+                  <div className="stack">
+                    <div className="skeleton skeleton-half" />
+                    <div className="skeleton skeleton-wide" />
+                    <div className="skeleton skeleton-medium" />
+                  </div>
                 )}
-                {problem.constraints && problem.constraints.length > 0 && (
-                  <details className="problem-details">
-                    <summary>Constraints</summary>
-                    <ul>
-                      {problem.constraints.map((constraint) => (
-                        <li key={constraint}>{constraint}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-                <SubmissionGuide supportedLanguages={supportedLanguages} variant="panel" />
-              </>
-            ) : connected && problemDelayed ? (
-              <div className="inline-state" role="status">
-                <strong>Problem is taking longer than expected.</strong>
-                <span>Retry the room request without leaving your session.</span>
-                <button className="button" type="button" onClick={requestRoomState}>
-                  retry problem
-                </button>
-              </div>
-            ) : (
-              <div className="stack">
-                <div className="skeleton skeleton-half" />
-                <div className="skeleton skeleton-wide" />
-                <div className="skeleton skeleton-medium" />
-              </div>
-            )}
-          </SurfaceCard>
+              </SurfaceCard>
 
-          <SurfaceCard className="test-card">
-            <div className="section-heading compact-heading">
-              <div>
-                <div className="eyebrow">judge result</div>
-                <h2>Last submit</h2>
-              </div>
-              <span className="section-stamp">stdout</span>
-            </div>
-            {result ? (
-              <div
-                className={result.success ? "result-box success" : "result-box error"}
-                role="status"
-                aria-live="polite"
-              >
-                <strong>
-                  {result.invalidated
-                    ? "invalidated"
-                    : result.success
-                      ? "accepted"
-                      : "rejected"}
-                </strong>
-                <span>{result.output || "no output"}</span>
-                <dl className="result-metrics">
+              <SurfaceCard className="test-card">
+                <div className="section-heading compact-heading">
                   <div>
-                    <dt>Score</dt>
-                    <dd>
-                      {formatScore(result.score)}
-                      {result.maxScore ? ` / ${formatScore(result.maxScore)}` : ""}
-                    </dd>
+                    <div className="eyebrow">judge result</div>
+                    <h2>Last submit</h2>
                   </div>
-                  <div>
-                    <dt>Characters</dt>
-                    <dd>{result.characterCount}</dd>
-                  </div>
-                  <div>
-                    <dt>Bytes</dt>
-                    <dd>{result.characterBytes}</dd>
-                  </div>
-                  <div>
-                    <dt>Runtime</dt>
-                    <dd>{formatRuntime(result.runtimeMs)}</dd>
-                  </div>
-                  <div>
-                    <dt>Memory</dt>
-                    <dd>{formatMemory(result.memoryBytes)}</dd>
-                  </div>
-                  <div>
-                    <dt>Tests</dt>
-                    <dd>
-                      {result.passedTests === undefined ||
-                      result.totalTests === undefined
-                        ? "N/A"
-                        : `${result.passedTests}/${result.totalTests}`}
-                    </dd>
-                  </div>
-                </dl>
-                {result.scoreBreakdown && (
-                  <details className="result-details">
-                    <summary>How this score was calculated</summary>
-                    <p>{result.scoreBreakdown.summary}</p>
-                    {result.scoreBreakdown.components.map((component) => (
-                      <div className="breakdown-row" key={component.key}>
-                        <span>{component.label}</span>
-                        <strong>
-                          {formatScore(component.weightedContribution)} pts
-                        </strong>
-                        <small>{component.weight}</small>
-                      </div>
-                    ))}
-                  </details>
-                )}
-                {result.compression?.suggestions.length ? (
-                  <details className="result-details">
-                    <summary>
-                      Golfing insights ({result.compression.estimatedSavings} chars)
-                    </summary>
-                    {result.compression.suggestions.map((suggestion) => (
-                      <div className="insight-row" key={suggestion.id}>
-                        <strong>{suggestion.title}</strong>
-                        <span>{suggestion.message}</span>
-                      </div>
-                    ))}
-                  </details>
-                ) : null}
-                {result.analytics && (
-                  <dl className="analytics-strip" aria-label="Submission analytics">
-                    <div>
-                      <dt>Percentile</dt>
-                      <dd>
-                        {result.analytics.percentileBps === null
-                          ? "N/A"
-                          : `${(result.analytics.percentileBps / 100).toFixed(1)}%`}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Global rank</dt>
-                      <dd>
-                        {result.analytics.globalRanking
-                          ? `${result.analytics.globalRanking.rank}/${result.analytics.globalRanking.population}`
-                          : "N/A"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Language rank</dt>
-                      <dd>
-                        {result.analytics.languageRanking
-                          ? `${result.analytics.languageRanking.rank}/${result.analytics.languageRanking.population}`
-                          : "N/A"}
-                      </dd>
-                    </div>
-                  </dl>
-                )}
-              </div>
-            ) : (
-              <EmptyState
-                title="No stroke yet"
-                description="Submit once the byte count looks worth testing."
-              />
-            )}
-          </SurfaceCard>
-        </aside>
-
-        <section className="editor-command-center" aria-label="Code editor">
-          <div className="editor-toolbar">
-            <div>
-              <div className="eyebrow">Monaco</div>
-              <h2>Your card</h2>
-            </div>
-            <div className="toolbar">
-              <span className="badge">{characterCount} chars</span>
-              <button
-                type="button"
-                className="button button-primary"
-                onClick={submitCode}
-                disabled={submitDisabled}
-                aria-describedby="submit-status"
-              >
-                {submitPending
-                  ? "judging…"
-                  : cooldownActive
-                    ? `retry in ${Math.ceil(cooldownRemainingMs / 1000)}s`
-                    : "submit"}
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={() => router.push(`/replay/${roomCode}`)}
-              >
-                replay
-              </button>
-            </div>
-            <span className="sr-only" id="submit-status" role="status" aria-live="polite">
-              {integritySession?.status === "invalidated"
-                ? "Submission is disabled because this session was invalidated."
-                : submitPending
-                  ? "Submission is being judged."
-                  : cooldownActive
-                    ? `Submission cooldown has ${Math.ceil(cooldownRemainingMs / 1000)} seconds remaining.`
-                    : ""}
-            </span>
-          </div>
-
-          {roomMode === "multiplayer" && (
-            <div className="editor-tabs" role="tablist" aria-label="Editor view">
-              <button
-                className={activeEditor === "you" ? "editor-tab active" : "editor-tab"}
-                type="button"
-                role="tab"
-                aria-selected={activeEditor === "you"}
-                aria-controls="player-editor"
-                tabIndex={activeEditor === "you" ? 0 : -1}
-                onClick={() => setActiveEditor("you")}
-              >
-                your code
-              </button>
-              <button
-                className={
-                  activeEditor === "opponent" ? "editor-tab active" : "editor-tab"
-                }
-                type="button"
-                role="tab"
-                aria-selected={activeEditor === "opponent"}
-                aria-controls="opponent-editor"
-                tabIndex={activeEditor === "opponent" ? 0 : -1}
-                onClick={() => setActiveEditor("opponent")}
-              >
-                opponent
-              </button>
-            </div>
-          )}
-
-          <div className="editor-duo">
-            <div
-              className={`editor-pane premium-editor-pane ${
-                activeEditor === "you" ? "" : "pane-hidden-narrow"
-              }`}
-              id="player-editor"
-              role="tabpanel"
-              onPasteCapture={blockPaste}
-              onKeyDownCapture={blockPasteShortcut}
-              onContextMenuCapture={blockContextMenu}
-              onDropCapture={blockDrop}
-              onDragOverCapture={(event) => event.preventDefault()}
-            >
-              <div className="editor-title">
-                <strong>you</strong>
-                <span className="badge">{language}</span>
-              </div>
-              <Editor
-                onMount={(_, monaco) => {
-                  monacoRef.current = monaco;
-                }}
-                height="100%"
-                language={language}
-                value={code}
-                theme={monacoTheme}
-                options={{
-                  minimap: { enabled: false },
-                  fontFamily: "JetBrains Mono, monospace",
-                  fontSize: 14,
-                  padding: { top: 18, bottom: 18 },
-                  wordWrap: "on",
-                  accessibilitySupport: "on",
-                }}
-                onChange={(value) => {
-                  const newCode = value || "";
-                  setCode(newCode);
-                  syncCodeUpdate(newCode, language);
-                }}
-              />
-            </div>
-
-            {roomMode === "multiplayer" && (
-              <div
-                className={`editor-pane premium-editor-pane opponent-pane ${
-                  activeEditor === "opponent" ? "" : "pane-hidden-narrow"
-                }`}
-                id="opponent-editor"
-                role="tabpanel"
-              >
-                <div className="editor-title">
-                  <strong>opponent</strong>
-                  <span className="badge">readonly</span>
+                  <span className="section-stamp">stdout</span>
                 </div>
-                <Editor
-                  height="100%"
-                  language={opponentLanguage}
-                  value={opponentCode}
-                  theme={monacoTheme}
-                  options={{
-                    readOnly: true,
-                    minimap: { enabled: false },
-                    fontFamily: "JetBrains Mono, monospace",
-                    fontSize: 13,
-                    padding: { top: 18, bottom: 18 },
-                    wordWrap: "on",
-                    accessibilitySupport: "on",
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="room-panel-stack">
-          <SurfaceCard className="round-card">
-            <div className="section-heading compact-heading">
-              <div>
-                <div className="eyebrow">current attempt</div>
-                <h2>Attempt</h2>
-              </div>
-              <span className="section-stamp">{roomMode}</span>
-            </div>
-
-            <div className="score-lines">
-              <div>
-                <span>characters</span>
-                <strong>{characterCount}</strong>
-              </div>
-              <div>
-                <span>language</span>
-                <strong>{language}</strong>
-              </div>
-              <div>
-                <span>last judge</span>
-                <strong className={result?.success ? "score-good" : result ? "score-over" : ""}>
-                  {result ? (result.success ? "accepted" : "rejected") : "not submitted"}
-                </strong>
-              </div>
-            </div>
-
-            <div className="submission-list">
-              {submissionHistory.length ? (
-                submissionHistory.map((entry) => (
-                  <div className="submission-row" key={entry.at}>
-                    <span>{new Date(entry.at).toLocaleTimeString()}</span>
+                {result ? (
+                  <div
+                    className={
+                      result.success ? "result-box success" : "result-box error"
+                    }
+                    role="status"
+                    aria-live="polite"
+                  >
                     <strong>
-                      {entry.score === undefined
-                        ? `${entry.characterCount} chars`
-                        : `${formatScore(entry.score)} pts`}
+                      {result.invalidated
+                        ? "invalidated"
+                        : result.success
+                          ? "accepted"
+                          : "rejected"}
                     </strong>
-                    <em className={entry.success ? "score-good" : "score-over"}>
-                      {entry.success
-                        ? `${entry.characterCount}c · ${formatRuntime(entry.runtimeMs)}`
-                        : "rejected"}
-                    </em>
+                    <span>{result.output || "no output"}</span>
+                    <dl className="result-metrics">
+                      <div>
+                        <dt>Score</dt>
+                        <dd>
+                          {formatScore(result.score)}
+                          {result.maxScore
+                            ? ` / ${formatScore(result.maxScore)}`
+                            : ""}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Characters</dt>
+                        <dd>{result.characterCount}</dd>
+                      </div>
+                      <div>
+                        <dt>Bytes</dt>
+                        <dd>{result.characterBytes}</dd>
+                      </div>
+                      <div>
+                        <dt>Runtime</dt>
+                        <dd>{formatRuntime(result.runtimeMs)}</dd>
+                      </div>
+                      <div>
+                        <dt>Memory</dt>
+                        <dd>{formatMemory(result.memoryBytes)}</dd>
+                      </div>
+                      <div>
+                        <dt>Tests</dt>
+                        <dd>
+                          {result.passedTests === undefined ||
+                          result.totalTests === undefined
+                            ? "N/A"
+                            : `${result.passedTests}/${result.totalTests}`}
+                        </dd>
+                      </div>
+                    </dl>
+                    {result.scoreBreakdown && (
+                      <details className="result-details">
+                        <summary>How this score was calculated</summary>
+                        <p>{result.scoreBreakdown.summary}</p>
+                        {result.scoreBreakdown.components.map((component) => (
+                          <div className="breakdown-row" key={component.key}>
+                            <span>{component.label}</span>
+                            <strong>
+                              {formatScore(component.weightedContribution)} pts
+                            </strong>
+                            <small>{component.weight}</small>
+                          </div>
+                        ))}
+                      </details>
+                    )}
+                    {result.compression?.suggestions.length ? (
+                      <details className="result-details">
+                        <summary>
+                          Golfing insights (
+                          {result.compression.estimatedSavings} chars)
+                        </summary>
+                        {result.compression.suggestions.map((suggestion) => (
+                          <div className="insight-row" key={suggestion.id}>
+                            <strong>{suggestion.title}</strong>
+                            <span>{suggestion.message}</span>
+                          </div>
+                        ))}
+                      </details>
+                    ) : null}
+                    {result.analytics && (
+                      <dl
+                        className="analytics-strip"
+                        aria-label="Submission analytics"
+                      >
+                        <div>
+                          <dt>Percentile</dt>
+                          <dd>
+                            {result.analytics.percentileBps === null
+                              ? "N/A"
+                              : `${(result.analytics.percentileBps / 100).toFixed(1)}%`}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Global rank</dt>
+                          <dd>
+                            {result.analytics.globalRanking
+                              ? `${result.analytics.globalRanking.rank}/${result.analytics.globalRanking.population}`
+                              : "N/A"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Language rank</dt>
+                          <dd>
+                            {result.analytics.languageRanking
+                              ? `${result.analytics.languageRanking.rank}/${result.analytics.languageRanking.population}`
+                              : "N/A"}
+                          </dd>
+                        </div>
+                      </dl>
+                    )}
                   </div>
-                ))
-              ) : (
-                <EmptyState
-                  title="No submissions"
-                  description="Submit code to record attempts for this room."
-                />
-              )}
-            </div>
-          </SurfaceCard>
+                ) : (
+                  <EmptyState
+                    title="No stroke yet"
+                    description="Submit once the byte count looks worth testing."
+                  />
+                )}
+              </SurfaceCard>
+            </aside>
 
-          <SurfaceCard className="leader-card">
-            <div className="section-heading compact-heading">
-              <div>
-                <div className="eyebrow">Leaderboard</div>
-                <h2>Top score</h2>
-              </div>
-              <span className="section-stamp">rank</span>
-            </div>
-            <div className="leaderboard">
-              {sortedLeaderboard.length ? (
-                sortedLeaderboard.map(([socketId, data], index) => (
-                  <div className="leaderboard-row premium-row" key={socketId}>
-                    <span>#{index + 1}</span>
-                    <strong>{socketId.slice(0, 6)}</strong>
-                    <small>
-                      {data.language} · {data.characterCount}c ·{" "}
-                      {formatRuntime(data.runtimeMs)}
-                    </small>
-                    <em>{formatScore(data.score)} pts</em>
-                  </div>
-                ))
-              ) : (
-                <EmptyState
-                  title="No accepted scores"
-                  description="The first passing submit writes row one."
-                />
-              )}
-            </div>
-          </SurfaceCard>
-
-          <SurfaceCard className="analytics-card">
-            <div className="section-heading compact-heading">
-              <div>
-                <div className="eyebrow">post-submit</div>
-                <h2>Performance trend</h2>
-              </div>
-              <span className="section-stamp">
-                {result?.analytics?.timeline.length ?? 0}
-              </span>
-            </div>
-            {result?.analytics ? (
-              <div className="trend-grid">
-                <TrendChart
-                  label="Score"
-                  values={(result.analytics.trends.score || []).map(
-                    (point) => point.value,
-                  )}
-                  format={(value) => `${formatScore(value)} pts`}
-                />
-                <TrendChart
-                  label="Characters"
-                  values={(result.analytics.trends.characterCount || []).map(
-                    (point) => point.value,
-                  )}
-                  format={(value) => `${Math.round(value)} chars`}
-                />
-                <TrendChart
-                  label="Runtime"
-                  values={(result.analytics.trends.runtimeMs || []).map(
-                    (point) => point.value,
-                  )}
-                  format={(value) => formatRuntime(value)}
-                />
-              </div>
-            ) : (
-              <EmptyState
-                title="No analytics yet"
-                description="The judge returns score and trend data after a submission."
-              />
-            )}
-          </SurfaceCard>
-
-          <SurfaceCard className="integrity-card">
-            <div className="section-heading compact-heading">
-              <div>
-                <div className="eyebrow">anti-cheat</div>
-                <h2>Integrity</h2>
-              </div>
-              <span className="section-stamp">{warningTotals}</span>
-            </div>
-            {Object.keys(antiCheatStats).length ? (
-              Object.entries(antiCheatStats).map(([playerId, stats], index) => (
-                <div className="integrity-row" key={playerId}>
-                  <strong>player {index + 1}</strong>
-                  <span>{playerId.slice(0, 8)}</span>
-                  <em>
-                    tabs {stats.tabSwitches ?? emptyAntiCheatStats.tabSwitches} /
-                    pastes{" "}
-                    {stats.suspiciousPastes ??
-                      emptyAntiCheatStats.suspiciousPastes}{" "}
-                    / cooldown{" "}
-                    {stats.submissionSpamAttempts ??
-                      emptyAntiCheatStats.submissionSpamAttempts}
-                  </em>
+            <section className="editor-command-center" aria-label="Code editor">
+              <div className="editor-toolbar">
+                <div>
+                  <div className="eyebrow">Monaco</div>
+                  <h2>Your card</h2>
                 </div>
-              ))
-            ) : (
-              <EmptyState
-                title="No events"
-                description="Integrity events from this room appear here."
-              />
-            )}
-          </SurfaceCard>
-        </aside>
+                <div className="toolbar">
+                  <span className="badge">{characterCount} chars</span>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={submitCode}
+                    disabled={submitDisabled}
+                    aria-describedby="submit-status"
+                  >
+                    {submitPending
+                      ? "judging…"
+                      : cooldownActive
+                        ? `retry in ${Math.ceil(cooldownRemainingMs / 1000)}s`
+                        : "submit"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => router.push(`/replay/${roomCode}`)}
+                  >
+                    replay
+                  </button>
+                </div>
+                <span
+                  className="sr-only"
+                  id="submit-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {integritySession?.status === "invalidated"
+                    ? "Submission is disabled because this session was invalidated."
+                    : submitPending
+                      ? "Submission is being judged."
+                      : cooldownActive
+                        ? `Submission cooldown has ${Math.ceil(cooldownRemainingMs / 1000)} seconds remaining.`
+                        : ""}
+                </span>
+              </div>
+
+              {roomMode === "multiplayer" && (
+                <div
+                  className="editor-tabs"
+                  role="tablist"
+                  aria-label="Editor view"
+                >
+                  <button
+                    className={
+                      activeEditor === "you"
+                        ? "editor-tab active"
+                        : "editor-tab"
+                    }
+                    type="button"
+                    role="tab"
+                    aria-selected={activeEditor === "you"}
+                    aria-controls="player-editor"
+                    tabIndex={activeEditor === "you" ? 0 : -1}
+                    onClick={() => setActiveEditor("you")}
+                  >
+                    your code
+                  </button>
+                  <button
+                    className={
+                      activeEditor === "opponent"
+                        ? "editor-tab active"
+                        : "editor-tab"
+                    }
+                    type="button"
+                    role="tab"
+                    aria-selected={activeEditor === "opponent"}
+                    aria-controls="opponent-editor"
+                    tabIndex={activeEditor === "opponent" ? 0 : -1}
+                    onClick={() => setActiveEditor("opponent")}
+                  >
+                    opponent
+                  </button>
+                </div>
+              )}
+
+              <div className="editor-duo">
+                <div
+                  className={`editor-pane premium-editor-pane ${
+                    activeEditor === "you" ? "" : "pane-hidden-narrow"
+                  }`}
+                  id="player-editor"
+                  role="tabpanel"
+                  onPasteCapture={blockPaste}
+                  onKeyDownCapture={blockPasteShortcut}
+                  onContextMenuCapture={blockContextMenu}
+                  onDropCapture={blockDrop}
+                  onDragOverCapture={(event) => event.preventDefault()}
+                >
+                  <div className="editor-title">
+                    <strong>you</strong>
+                    <span className="badge">{language}</span>
+                  </div>
+                  <Editor
+                    onMount={(_, monaco) => {
+                      monacoRef.current = monaco;
+                    }}
+                    height="100%"
+                    language={language}
+                    value={code}
+                    theme={monacoTheme}
+                    options={{
+                      minimap: { enabled: false },
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 14,
+                      padding: { top: 18, bottom: 18 },
+                      wordWrap: "on",
+                      accessibilitySupport: "on",
+                    }}
+                    onChange={(value) => {
+                      const newCode = value || "";
+                      setCode(newCode);
+                      syncCodeUpdate(newCode, language);
+                    }}
+                  />
+                </div>
+
+                {roomMode === "multiplayer" && (
+                  <div
+                    className={`editor-pane premium-editor-pane opponent-pane ${
+                      activeEditor === "opponent" ? "" : "pane-hidden-narrow"
+                    }`}
+                    id="opponent-editor"
+                    role="tabpanel"
+                  >
+                    <div className="editor-title">
+                      <strong>opponent</strong>
+                      <span className="badge">readonly</span>
+                    </div>
+                    <Editor
+                      height="100%"
+                      language={opponentLanguage}
+                      value={opponentCode}
+                      theme={monacoTheme}
+                      options={{
+                        readOnly: true,
+                        minimap: { enabled: false },
+                        fontFamily: "JetBrains Mono, monospace",
+                        fontSize: 13,
+                        padding: { top: 18, bottom: 18 },
+                        wordWrap: "on",
+                        accessibilitySupport: "on",
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <aside className="room-panel-stack">
+              <SurfaceCard className="round-card">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <div className="eyebrow">current attempt</div>
+                    <h2>Attempt</h2>
+                  </div>
+                  <span className="section-stamp">{roomMode}</span>
+                </div>
+
+                <div className="score-lines">
+                  <div>
+                    <span>characters</span>
+                    <strong>{characterCount}</strong>
+                  </div>
+                  <div>
+                    <span>language</span>
+                    <strong>{language}</strong>
+                  </div>
+                  <div>
+                    <span>last judge</span>
+                    <strong
+                      className={
+                        result?.success
+                          ? "score-good"
+                          : result
+                            ? "score-over"
+                            : ""
+                      }
+                    >
+                      {result
+                        ? result.success
+                          ? "accepted"
+                          : "rejected"
+                        : "not submitted"}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="submission-list">
+                  {submissionHistory.length ? (
+                    submissionHistory.map((entry) => (
+                      <div className="submission-row" key={entry.at}>
+                        <span>{new Date(entry.at).toLocaleTimeString()}</span>
+                        <strong>
+                          {entry.score === undefined
+                            ? `${entry.characterCount} chars`
+                            : `${formatScore(entry.score)} pts`}
+                        </strong>
+                        <em
+                          className={
+                            entry.success ? "score-good" : "score-over"
+                          }
+                        >
+                          {entry.success
+                            ? `${entry.characterCount}c · ${formatRuntime(entry.runtimeMs)}`
+                            : "rejected"}
+                        </em>
+                      </div>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title="No submissions"
+                      description="Submit code to record attempts for this room."
+                    />
+                  )}
+                </div>
+              </SurfaceCard>
+
+              <SurfaceCard className="leader-card">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <div className="eyebrow">Leaderboard</div>
+                    <h2>Top score</h2>
+                  </div>
+                  <span className="section-stamp">rank</span>
+                </div>
+                <div className="leaderboard">
+                  {sortedLeaderboard.length ? (
+                    sortedLeaderboard.map(([socketId, data], index) => (
+                      <div
+                        className="leaderboard-row premium-row"
+                        key={socketId}
+                      >
+                        <span>#{index + 1}</span>
+                        <strong>{socketId.slice(0, 6)}</strong>
+                        <small>
+                          {data.language} · {data.characterCount}c ·{" "}
+                          {formatRuntime(data.runtimeMs)}
+                        </small>
+                        <em>{formatScore(data.score)} pts</em>
+                      </div>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title="No accepted scores"
+                      description="The first passing submit writes row one."
+                    />
+                  )}
+                </div>
+              </SurfaceCard>
+
+              <SurfaceCard className="analytics-card">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <div className="eyebrow">post-submit</div>
+                    <h2>Performance trend</h2>
+                  </div>
+                  <span className="section-stamp">
+                    {result?.analytics?.timeline.length ?? 0}
+                  </span>
+                </div>
+                {result?.analytics ? (
+                  <div className="trend-grid">
+                    <TrendChart
+                      label="Score"
+                      values={(result.analytics.trends.score || []).map(
+                        (point) => point.value,
+                      )}
+                      format={(value) => `${formatScore(value)} pts`}
+                    />
+                    <TrendChart
+                      label="Characters"
+                      values={(
+                        result.analytics.trends.characterCount || []
+                      ).map((point) => point.value)}
+                      format={(value) => `${Math.round(value)} chars`}
+                    />
+                    <TrendChart
+                      label="Runtime"
+                      values={(result.analytics.trends.runtimeMs || []).map(
+                        (point) => point.value,
+                      )}
+                      format={(value) => formatRuntime(value)}
+                    />
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No analytics yet"
+                    description="The judge returns score and trend data after a submission."
+                  />
+                )}
+              </SurfaceCard>
+
+              <SurfaceCard className="integrity-card">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <div className="eyebrow">anti-cheat</div>
+                    <h2>Integrity</h2>
+                  </div>
+                  <span className="section-stamp">{warningTotals}</span>
+                </div>
+                {Object.keys(antiCheatStats).length ? (
+                  Object.entries(antiCheatStats).map(
+                    ([playerId, stats], index) => (
+                      <div className="integrity-row" key={playerId}>
+                        <strong>player {index + 1}</strong>
+                        <span>{playerId.slice(0, 8)}</span>
+                        <em>
+                          tabs{" "}
+                          {stats.tabSwitches ?? emptyAntiCheatStats.tabSwitches}{" "}
+                          / pastes{" "}
+                          {stats.suspiciousPastes ??
+                            emptyAntiCheatStats.suspiciousPastes}{" "}
+                          / cooldown{" "}
+                          {stats.submissionSpamAttempts ??
+                            emptyAntiCheatStats.submissionSpamAttempts}
+                        </em>
+                      </div>
+                    ),
+                  )
+                ) : (
+                  <EmptyState
+                    title="No events"
+                    description="Integrity events from this room appear here."
+                  />
+                )}
+              </SurfaceCard>
+            </aside>
           </section>
         </>
       )}

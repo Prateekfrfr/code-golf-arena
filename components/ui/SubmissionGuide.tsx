@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import type { Language } from "@/types/domain";
 
 const languageLabels: Record<Language, string> = {
@@ -67,6 +67,68 @@ public class Main {
 }`,
 };
 
+// One example at a time, full width, so the code is readable instead of
+// four clipped columns.
+function SubmissionExamples({ languages }: { languages: Language[] }) {
+  const [active, setActive] = useState<Language>(languages[0]);
+  const baseId = useId();
+  const current = languages.includes(active) ? active : languages[0];
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const index = languages.indexOf(current);
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % languages.length;
+    else if (event.key === "ArrowLeft")
+      next = (index - 1 + languages.length) % languages.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = languages.length - 1;
+    else return;
+
+    event.preventDefault();
+    setActive(languages[next]);
+    document.getElementById(`${baseId}-tab-${languages[next]}`)?.focus();
+  };
+
+  return (
+    <div className="submission-examples">
+      <div
+        className="submission-tabs"
+        role="tablist"
+        aria-label="Example language"
+      >
+        {languages.map((lang) => {
+          const selected = lang === current;
+          return (
+            <button
+              key={lang}
+              id={`${baseId}-tab-${lang}`}
+              type="button"
+              role="tab"
+              className="submission-tab"
+              aria-selected={selected}
+              aria-controls={`${baseId}-panel`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActive(lang)}
+              onKeyDown={handleKeyDown}
+            >
+              {languageLabels[lang] || lang}
+            </button>
+          );
+        })}
+      </div>
+      <pre
+        id={`${baseId}-panel`}
+        className="submission-code"
+        role="tabpanel"
+        aria-labelledby={`${baseId}-tab-${current}`}
+        tabIndex={0}
+      >
+        {submissionExamples[current]}
+      </pre>
+    </div>
+  );
+}
+
 export function SubmissionGuide({
   supportedLanguages = ["python", "javascript", "cpp", "java"],
   variant = "standalone",
@@ -88,14 +150,7 @@ export function SubmissionGuide({
           <p style={{ margin: "4px 0 8px", fontSize: "12px", lineHeight: "1.5" }}>
             Submit a complete program reading standard input (stdin) and writing to standard output (stdout), Codeforces-style. Do not use LeetCode-style <code>class Solution</code> wrappers.
           </p>
-          <div className="submission-example-grid">
-            {activeLanguages.map((lang) => (
-              <div className="submission-example" key={lang}>
-                <strong>{languageLabels[lang] || lang}</strong>
-                <pre>{submissionExamples[lang]}</pre>
-              </div>
-            ))}
-          </div>
+          <SubmissionExamples languages={activeLanguages} />
         </div>
       </details>
     );
@@ -115,14 +170,7 @@ export function SubmissionGuide({
           <code>main()</code>, not a LeetCode-style <code>class Solution</code>{" "}
           wrapper.
         </p>
-        <div className="submission-example-grid">
-          {activeLanguages.map((lang) => (
-            <div className="submission-example" key={lang}>
-              <strong>{languageLabels[lang] || lang}</strong>
-              <pre>{submissionExamples[lang]}</pre>
-            </div>
-          ))}
-        </div>
+        <SubmissionExamples languages={activeLanguages} />
       </div>
     </details>
   );

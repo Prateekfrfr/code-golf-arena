@@ -2,13 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { DecalGeometry } from "three/addons/geometries/DecalGeometry.js";
 
 const GOLD = "#d4af37";
-const DIMPLE_COUNT = 332;
-const DIMPLE_DEPTH = 0.022;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 function detectWebGL() {
   try {
@@ -17,66 +13,6 @@ function detectWebGL() {
   } catch {
     return false;
   }
-}
-
-/**
- * Builds a unit golf ball with real, indented dimples. Dimple centres sit on
- * a Fibonacci lattice (sorted by y), so each vertex only has to check the
- * handful of centres whose latitude is within one dimple radius.
- */
-function buildGolfBallGeometry(detail: number) {
-  const base = new THREE.IcosahedronGeometry(1, detail);
-  base.deleteAttribute("normal");
-  base.deleteAttribute("uv");
-  const geometry = mergeVertices(base);
-  base.dispose();
-
-  const centres = new Float32Array(DIMPLE_COUNT * 3);
-  for (let i = 0; i < DIMPLE_COUNT; i++) {
-    const y = 1 - ((i + 0.5) * 2) / DIMPLE_COUNT;
-    const ring = Math.sqrt(1 - y * y);
-    const theta = i * GOLDEN_ANGLE;
-    centres[i * 3] = Math.cos(theta) * ring;
-    centres[i * 3 + 1] = y;
-    centres[i * 3 + 2] = Math.sin(theta) * ring;
-  }
-
-  // Hexagonal packing distance on a sphere, shrunk to leave a land between dimples.
-  const spacing = Math.sqrt((8 * Math.PI) / (Math.sqrt(3) * DIMPLE_COUNT));
-  const radius = spacing * 0.44;
-
-  const position = geometry.getAttribute("position") as THREE.BufferAttribute;
-  const p = new THREE.Vector3();
-
-  for (let v = 0; v < position.count; v++) {
-    p.fromBufferAttribute(position, v).normalize();
-
-    const first = Math.max(
-      0,
-      Math.floor(((1 - (p.y + radius)) * DIMPLE_COUNT) / 2 - 1),
-    );
-    const last = Math.min(
-      DIMPLE_COUNT - 1,
-      Math.ceil(((1 - (p.y - radius)) * DIMPLE_COUNT) / 2),
-    );
-
-    let nearest = Infinity;
-    for (let i = first; i <= last; i++) {
-      const dx = p.x - centres[i * 3];
-      const dy = p.y - centres[i * 3 + 1];
-      const dz = p.z - centres[i * 3 + 2];
-      const distance = dx * dx + dy * dy + dz * dz;
-      if (distance < nearest) nearest = distance;
-    }
-
-    const s = Math.sqrt(nearest) / radius;
-    const depth = s < 1 ? DIMPLE_DEPTH * (1 - s * s) : 0;
-    p.multiplyScalar(1 - depth);
-    position.setXYZ(v, p.x, p.y, p.z);
-  }
-
-  geometry.computeVertexNormals();
-  return geometry;
 }
 
 function createPrintTexture() {
@@ -219,7 +155,7 @@ function buildGolfBallGeometry(radius: number): THREE.BufferGeometry {
 
 export function GolfBallScene() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [webglSupported] = useState(detectWebGL);
+  const [webglSupported, setWebglSupported] = useState(detectWebGL);
 
   useEffect(() => {
     const container = containerRef.current;

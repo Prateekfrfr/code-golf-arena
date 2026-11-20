@@ -50,7 +50,9 @@ export const auth = betterAuth({
     defaultCookieAttributes: {
       httpOnly: true,
       path: '/',
-      sameSite: 'lax'
+      // The browser app and API are separate origins in production. Cross-site
+      // credentialed fetches need SameSite=None; HTTPS is enforced above.
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
     }
   },
   emailAndPassword: {
@@ -129,8 +131,8 @@ export const auth = betterAuth({
       }
     }
   },
-  // Host-only cookies intentionally have no Domain attribute. localhost:3001
-  // and localhost:3005 are different origins but the same site, so Lax cookies
-  // are sent to the API without making them available to another host.
+  // Host-only cookies intentionally have no Domain attribute. Production uses
+  // SameSite=None for credentialed requests from a separately hosted frontend;
+  // development stays SameSite=Lax for the localhost app/API pair.
   trustedOrigins: [...serverConfig.corsOrigins, baseUrl.origin]
 });

@@ -46,7 +46,7 @@ const GoldArenaScene = dynamic(
 type TopicChoice = ProblemTopic | "random";
 
 const topicOptions: Array<{ value: TopicChoice; label: string }> = [
-  { value: "random", label: "Random" },
+  { value: "random", label: "Any" },
   { value: "arrays", label: "Arrays" },
   { value: "strings", label: "Strings" },
   { value: "math", label: "Math" },
@@ -169,10 +169,7 @@ export default function HomePage() {
 
       <section className="unslop-landing">
         {/* Left Stage: 3JS Interactive Scene + Editorial Craft */}
-        <section
-          className="unslop-stage"
-          aria-label="Interactive Arena Display"
-        >
+        <section className="unslop-stage" aria-label="Interactive Arena Display">
           <GoldArenaScene />
 
           <div className="unslop-copy-block">
@@ -180,8 +177,8 @@ export default function HomePage() {
               Code Golf <span className="gold-word">Arena</span>
             </h1>
             <p className="unslop-tagline">
-              Shortest accepted code wins. Multi-language deterministic
-              execution measured in UTF-8 bytes and runtime.
+              Shortest accepted code wins. Multi-language deterministic execution
+              measured in UTF-8 bytes and runtime.
             </p>
           </div>
         </section>
@@ -199,11 +196,7 @@ export default function HomePage() {
             {/* Topic selection chips */}
             <div className="unslop-field-group">
               <span className="unslop-label">Algorithm Topic</span>
-              <div
-                className="unslop-topic-chips"
-                role="radiogroup"
-                aria-label="Problem topic"
-              >
+              <div className="unslop-topic-chips" role="radiogroup" aria-label="Problem topic">
                 {topicOptions.map((option) => {
                   const isSelected = selectedTopic === option.value;
                   return (
@@ -212,7 +205,7 @@ export default function HomePage() {
                       type="button"
                       role="radio"
                       aria-checked={isSelected}
-                      className="unslop-topic-chip"
+                      className={`unslop-topic-chip ${isSelected ? "selected" : ""}`}
                       onClick={() => setSelectedTopic(option.value)}
                       disabled={Boolean(pendingAction)}
                     >
@@ -230,11 +223,10 @@ export default function HomePage() {
               onClick={createRoom}
               disabled={Boolean(pendingAction) || !connected}
             >
-              {pendingAction === "create"
-                ? "Initializing ArenaΓÇª"
-                : "Create Head-to-Head Arena"}
+              {pendingAction === "create" ? "Initializing ArenaΓÇª" : "Create Head-to-Head Arena"}
             </button>
 
+            {/* Join / Solo Practice Section */}
             <form
               className="unslop-join-section"
               noValidate
@@ -244,32 +236,38 @@ export default function HomePage() {
               }}
             >
               <label className="unslop-label" htmlFor="room-code">
-                Or join a friend
+                Join by Room Code
               </label>
-              <div className="unslop-join-row">
-                <input
-                  id="room-code"
-                  className="unslop-input-code"
-                  value={joinCode}
-                  onChange={(event) => {
-                    setJoinCode(
-                      event.target.value
-                        .replace(/[^a-z0-9]/gi, "")
-                        .toUpperCase()
-                        .slice(0, 8),
-                    );
-                    setJoinError("");
-                  }}
-                  placeholder="ABCD2345"
-                  maxLength={8}
-                  minLength={8}
-                  pattern="[A-Za-z0-9]{8}"
-                  autoComplete="off"
-                  autoCapitalize="characters"
-                  spellCheck={false}
-                  aria-invalid={Boolean(joinError)}
-                  aria-describedby={joinError ? "room-code-error" : undefined}
-                />
+              <input
+                id="room-code"
+                className="unslop-input-code"
+                value={joinCode}
+                onChange={(event) => {
+                  setJoinCode(
+                    event.target.value
+                      .replace(/[^a-z0-9]/gi, "")
+                      .toUpperCase()
+                      .slice(0, 8),
+                  );
+                  setJoinError("");
+                }}
+                placeholder="ABCD2345"
+                maxLength={8}
+                minLength={8}
+                pattern="[A-Za-z0-9]{8}"
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                aria-invalid={Boolean(joinError)}
+                aria-describedby={joinError ? "room-code-error" : undefined}
+              />
+              {joinError && (
+                <span className="field-error" id="room-code-error" role="alert">
+                  {joinError}
+                </span>
+              )}
+
+              <div className="unslop-actions-row">
                 <button
                   type="submit"
                   className="unslop-btn-outline"
@@ -286,23 +284,7 @@ export default function HomePage() {
                   {pendingAction === "solo" ? "LaunchingΓÇª" : "Solo Practice"}
                 </button>
               </div>
-              {joinError && (
-                <span className="field-error" id="room-code-error" role="alert">
-                  {joinError}
-                </span>
-              )}
             </form>
-
-            <button
-              type="button"
-              className="unslop-link-btn"
-              onClick={startSolo}
-              disabled={Boolean(pendingAction) || !connected}
-            >
-              {pendingAction === "solo"
-                ? "Starting practice…"
-                : "Practice alone"}
-            </button>
           </section>
         </aside>
       </section>

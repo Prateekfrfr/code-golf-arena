@@ -67,6 +67,11 @@ export const auth = betterAuth({
     }
   },
   account: {
+    // OAuth state is stored in PostgreSQL and matched against the provider's
+    // returned state. Do not also require a cross-site state cookie: browsers
+    // may block that cookie when the frontend and API use unrelated domains.
+    storeStateStrategy: 'database',
+    skipStateCookieCheck: true,
     accountLinking: {
       enabled: true,
       trustedProviders: ['google'],

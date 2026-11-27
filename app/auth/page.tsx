@@ -100,9 +100,10 @@ export default function AuthPage() {
     try {
       await authClient.signIn.social({
         provider: "google",
-        // OAuth callbacks are served by Express. A relative URL would resolve
-        // to localhost:3001 and produce "Cannot GET /" after success.
+        // OAuth callbacks are served by Express; use an absolute frontend URL
+        // so success and failure both return to the deployed app.
         callbackURL: `${window.location.origin}/`,
+        errorCallbackURL: `${window.location.origin}/auth`,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google sign-in failed.");

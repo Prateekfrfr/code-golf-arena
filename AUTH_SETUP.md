@@ -26,19 +26,20 @@ In Google Cloud Console, add this exact authorized redirect URI:
 http://localhost:3001/api/auth/callback/google
 ```
 
-For production, use HTTPS for both frontend and backend, set
-`BETTER_AUTH_URL` to the public backend origin, and register
+For production, use HTTPS for both frontend and backend, set `BETTER_AUTH_URL`
+to the public backend origin, and register
 `https://YOUR_BACKEND/api/auth/callback/google`. Set
 `NEXT_PUBLIC_BETTER_AUTH_URL` and `NEXT_PUBLIC_API_URL` to that same public
 backend origin in the frontend deployment. `CORS_ORIGINS` must list the exact
 frontend origin. Do not mix `localhost` and `127.0.0.1`.
 
 Better Auth writes host-only, HttpOnly session/state cookies with `Path=/`,
-`SameSite=Lax` locally and `SameSite=None; Secure` in production so browsers can
-send credentials from the separate frontend origin. Cookies remain host-only
-with no `Domain` attribute. Some browsers block third-party cookies for a
-frontend and backend on unrelated domains; use a shared parent domain or a
-same-origin proxy for those deployments.
+`SameSite=Lax` locally and `SameSite=None; Secure` in production. The OAuth
+state is verified from PostgreSQL, so the flow does not depend on browsers
+accepting a cross-site state cookie. For browsers that block third-party
+cookies entirely, use frontend and backend custom domains under the same
+registrable domain so session cookies remain available to credentialed API
+requests.
 
 The backend only exposes Better Auth endpoints below `/api/auth`. Application
 authorization reads the Better Auth session for HTTP and Socket.IO handshakes.
